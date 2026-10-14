@@ -86,6 +86,9 @@ private:
     void HandleGetHeight(ClientHandler* handler, AnTcpMessageType type, const void* data, int size);
     void HandleGetConfig(ClientHandler* handler, AnTcpMessageType type, const void* data, int size);
     void HandleExplorePoly(ClientHandler* handler, AnTcpMessageType type, const void* data, int size);
+    void HandleSetAvoidZones(ClientHandler* handler, AnTcpMessageType type, const void* data, int size);
+    void HandleSteer(ClientHandler* handler, AnTcpMessageType type, const void* data, int size);
+    void HandleReportStuck(ClientHandler* handler, AnTcpMessageType type, const void* data, int size);
 
     /// Path refinement options from request flags and an optional tuning trailer (nullptr = defaults).
     PathOptions MakePathOptions(int flags, const PathTuningData* tuning) const noexcept;

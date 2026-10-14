@@ -184,6 +184,95 @@ TEST_CASE(NavClient_FilterValidation)
     CHECK(client.QueryFilter() == provider.Get(ClientState::DEAD));
 }
 
+TEST_CASE(NavClient_ZeroCostForbidsAndPositiveCostAllows)
+{
+    MmapQueryFilterProvider provider(MmapFormat::TC335A, 1.3f, 4.0f);
+    AmeisenNavClient client(1, &provider, 64, 32);
+
+    dtPoly water{};
+    water.setArea(static_cast<unsigned char>(NavArea335a::WATER));
+    water.flags = static_cast<unsigned short>(NavFlag335a::WATER);
+    dtPoly steep{};
+    steep.setArea(static_cast<unsigned char>(NavArea335a::GROUND_STEEP));
+    steep.flags = static_cast<unsigned short>(NavFlag335a::GROUND_STEEP);
+
+    CHECK(client.QueryFilter()->passFilter(1, nullptr, &water));
+    CHECK(!client.QueryFilter()->passFilter(1, nullptr, &steep)); // excluded by flag on TrinityCore MMAPs
+
+    const AreaCost costs[]{{static_cast<unsigned char>(NavArea335a::WATER), 0.0f},
+                           {static_cast<unsigned char>(NavArea335a::GROUND_STEEP), 2.0f}};
+    REQUIRE(client.ConfigureQueryFilter(ClientState::NORMAL, costs));
+    CHECK(!client.QueryFilter()->passFilter(1, nullptr, &water));
+    CHECK(client.QueryFilter()->passFilter(1, nullptr, &steep));
+    CHECK_NEAR(client.QueryFilter()->getAreaCost(static_cast<int>(NavArea335a::GROUND_STEEP)), 2.0f, 1e-6);
+
+    // The map filter with zones keeps the area rules.
+    const AvoidZone zone{Vector3(0, 0, 0), 5.0f, 3.0f};
+    REQUIRE(client.SetAvoidZones(0, std::span(&zone, 1)));
+    const dtQueryFilter* mapFilter = client.QueryFilter(0, nullptr);
+    CHECK(mapFilter != client.QueryFilter());
+    CHECK(!mapFilter->passFilter(1, nullptr, &water));
+    CHECK(mapFilter->passFilter(1, nullptr, &steep));
+    CHECK(client.QueryFilter(1, nullptr) == client.QueryFilter()); // no zones on map 1
+}
+
+TEST_CASE(AvoidZone_SegmentLengthInside)
+{
+    const AvoidZone zone{Vector3(0.0f, 0.0f, 0.0f), 10.0f, 2.0f};
+    const float a[3]{-20.0f, 0.0f, 0.0f};
+    const float b[3]{20.0f, 0.0f, 0.0f};
+    CHECK_NEAR(SegmentLengthInZone(a, b, zone), 20.0f, 1e-3);
+
+    const float inside[3]{5.0f, 0.0f, 0.0f};
+    CHECK_NEAR(SegmentLengthInZone(a, inside, zone), 15.0f, 1e-3);
+
+    const float miss[3]{20.0f, 0.0f, 11.0f};
+    const float missStart[3]{-20.0f, 0.0f, 11.0f};
+    CHECK_EQ(SegmentLengthInZone(missStart, miss, zone), 0.0f);
+
+    // A bridge 30 yards above the zone isn't affected.
+    const float high0[3]{-20.0f, 30.0f, 0.0f};
+    const float high1[3]{20.0f, 30.0f, 0.0f};
+    CHECK_EQ(SegmentLengthInZone(high0, high1, zone), 0.0f);
+
+    // The filter adds (cost - 1) per yard inside.
+    NavQueryFilter filter;
+    filter.SetZones(std::span(&zone, 1));
+    dtPoly poly{};
+    CHECK_NEAR(filter.getCost(a, b, 0, nullptr, nullptr, 0, nullptr, &poly, 0, nullptr, nullptr), 40.0f + 20.0f, 1e-3);
+}
+
+TEST_CASE(AvoidZone_GridMatchesBruteForce)
+{
+    std::vector<AvoidZone> zones;
+
+    for (int i = 0; i < 300; ++i)
+    {
+        const float x = static_cast<float>((i * 7919) % 1000) - 500.0f;
+        const float z = static_cast<float>((i * 104729) % 1000) - 500.0f;
+        zones.push_back(AvoidZone{Vector3(x, 0.0f, z), 3.0f + static_cast<float>(i % 40), 1.5f + static_cast<float>(i % 5)});
+    }
+
+    NavQueryFilter filter;
+    filter.SetZones(zones);
+    dtPoly poly{};
+
+    for (int i = 0; i < 500; ++i)
+    {
+        const float a[3]{static_cast<float>((i * 31) % 1100) - 550.0f, 0.0f, static_cast<float>((i * 17) % 1100) - 550.0f};
+        const float b[3]{a[0] + static_cast<float>(i % 300) - 150.0f, 0.0f, a[2] + static_cast<float>((i * 3) % 300) - 150.0f};
+        float expected = dtVdist(a, b);
+
+        for (const AvoidZone& zone : zones)
+        {
+            expected += SegmentLengthInZone(a, b, zone) * (zone.cost - 1.0f);
+        }
+
+        CHECK_NEAR(filter.getCost(a, b, 0, nullptr, nullptr, 0, nullptr, &poly, 0, nullptr, nullptr), expected,
+                   expected * 1e-5 + 1e-3);
+    }
+}
+
 TEST_CASE(NavMeshCache_LoadsOncePerMapUnderContention)
 {
     NavMeshCache cache;

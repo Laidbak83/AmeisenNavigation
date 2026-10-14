@@ -48,6 +48,9 @@ const char* MessageName(AnTcpMessageType type) noexcept
         case MessageType::GET_HEIGHT: return "GetHeight";
         case MessageType::GET_CONFIG: return "GetConfig";
         case MessageType::CAST_RAY_EX: return "CastRayEx";
+        case MessageType::SET_AVOID_ZONES: return "SetAvoidZones";
+        case MessageType::STEER: return "Steer";
+        case MessageType::REPORT_STUCK: return "ReportStuck";
         default: return "Unknown";
     }
 }
@@ -74,6 +77,9 @@ NavServer::NavServer(const AmeisenNavConfig& config) : Cfg(config)
     settings.waterCost = Cfg.waterCost;
     settings.badLiquidCost = Cfg.badLiquidCost;
     settings.roadCost = Cfg.roadCost;
+    settings.avoidZonesFile = Cfg.avoidZonesFile;
+    settings.stuckZoneRadius = Cfg.stuckZoneRadius;
+    settings.stuckZoneCost = Cfg.stuckZoneCost;
 
     Navigation = std::make_unique<AmeisenNavigation>(settings);
     TcpServer = std::make_unique<AnTcpServer>(Cfg.ip, static_cast<unsigned short>(Cfg.port));
@@ -216,6 +222,18 @@ void NavServer::ValidateConfig(AmeisenNavConfig& config, std::vector<std::string
         config.cornerPoints = std::clamp(config.cornerPoints, 1, MAX_CORNER_POINTS);
     }
 
+    if (config.stuckZoneRadius <= 0.0f || config.stuckZoneRadius > MAX_AVOID_ZONE_RADIUS)
+    {
+        warnings.push_back(std::format("fStuckZoneRadius has to be within (0, {}], clamping", MAX_AVOID_ZONE_RADIUS));
+        config.stuckZoneRadius = std::clamp(config.stuckZoneRadius, 0.5f, MAX_AVOID_ZONE_RADIUS);
+    }
+
+    if (config.stuckZoneCost < 1.0f || config.stuckZoneCost > MAX_AVOID_ZONE_COST)
+    {
+        warnings.push_back(std::format("fStuckZoneCost has to be within [1, {}], clamping", MAX_AVOID_ZONE_COST));
+        config.stuckZoneCost = std::clamp(config.stuckZoneCost, 1.0f, MAX_AVOID_ZONE_COST);
+    }
+
     if (config.randomPathMaxDistance < 0.0f)
     {
         warnings.push_back("fRandomPathMaxDistance negative, clamping to 0");
@@ -304,6 +322,9 @@ void NavServer::RegisterCallbacks()
     add(MessageType::GET_HEIGHT, std::bind_front(&NavServer::HandleGetHeight, this));
     add(MessageType::GET_CONFIG, std::bind_front(&NavServer::HandleGetConfig, this));
     add(MessageType::EXPLORE_POLY, std::bind_front(&NavServer::HandleExplorePoly, this));
+    add(MessageType::SET_AVOID_ZONES, std::bind_front(&NavServer::HandleSetAvoidZones, this));
+    add(MessageType::STEER, std::bind_front(&NavServer::HandleSteer, this));
+    add(MessageType::REPORT_STUCK, std::bind_front(&NavServer::HandleReportStuck, this));
 }
 
 AnTcpError NavServer::Run() noexcept
@@ -836,4 +857,94 @@ void NavServer::HandleExplorePoly(ClientHandler* handler, AnTcpMessageType type,
 
     LogD("[", handler->GetId(), "] ExplorePoly map=", request.mapId, ok ? " ok" : " FAIL", " waypoints=",
          result.reached, "/", result.waypoints, " pts=", path.pointCount);
+}
+
+void NavServer::HandleSetAvoidZones(ClientHandler* handler, AnTcpMessageType type, const void* data, int size)
+{
+    const auto reply = [&](bool result) { handler->SendDataVar(type, result); };
+    AvoidZonesHeader header{};
+
+    if (!ReadRequest(data, size, header))
+    {
+        LogTooSmall(handler, type, size, sizeof(header));
+        reply(false);
+        return;
+    }
+
+    if (header.zoneCount < 0 || header.zoneCount > MAX_AVOID_ZONES
+        || static_cast<size_t>(size) < sizeof(header) + static_cast<size_t>(header.zoneCount) * sizeof(AvoidZoneData))
+    {
+        LogD("[", handler->GetId(), "] SetAvoidZones: invalid zone count ", header.zoneCount);
+        reply(false);
+        return;
+    }
+
+    std::vector<AvoidZone> zones(static_cast<size_t>(header.zoneCount));
+    const auto* entries = static_cast<const char*>(data) + sizeof(header);
+
+    for (size_t i = 0; i < zones.size(); ++i)
+    {
+        AvoidZoneData entry{};
+        std::memcpy(&entry, entries + i * sizeof(AvoidZoneData), sizeof(entry));
+        zones[i] = AvoidZone{entry.center, entry.radius, entry.cost};
+    }
+
+    const bool ok = Navigation->SetAvoidZones(handler->GetId(), header.mapId, zones);
+    LogD("[", handler->GetId(), "] SetAvoidZones map=", header.mapId, " zones=", zones.size(), ok ? " ok" : " FAIL");
+    reply(ok);
+}
+
+void NavServer::HandleSteer(ClientHandler* handler, AnTcpMessageType type, const void* data, int size)
+{
+    SteerRequestHeader header{};
+    SteerResponse response{0, Vector3{}, Vector3{}};
+
+    if (!ReadRequest(data, size, header))
+    {
+        LogTooSmall(handler, type, size, sizeof(header));
+        handler->SendDataPtr(type, &response);
+        return;
+    }
+
+    if (header.unitCount < 0 || header.unitCount > MAX_STEER_UNITS
+        || static_cast<size_t>(size) < sizeof(header) + static_cast<size_t>(header.unitCount) * sizeof(SteerUnitData))
+    {
+        LogD("[", handler->GetId(), "] Steer: invalid unit count ", header.unitCount);
+        handler->SendDataPtr(type, &response);
+        return;
+    }
+
+    std::vector<SteerUnit> units(static_cast<size_t>(header.unitCount));
+    const auto* entries = static_cast<const char*>(data) + sizeof(header);
+
+    for (size_t i = 0; i < units.size(); ++i)
+    {
+        SteerUnitData entry{};
+        std::memcpy(&entry, entries + i * sizeof(SteerUnitData), sizeof(entry));
+        units[i] = SteerUnit{entry.position, entry.velocity, entry.radius};
+    }
+
+    SteerResult result;
+
+    if (Navigation->Steer(handler->GetId(), header.mapId, header.position, header.velocity, header.target,
+                          header.maxSpeed, header.radius, header.deltaTime, units, result))
+    {
+        response = SteerResponse{1, result.velocity, result.position};
+    }
+
+    handler->SendDataPtr(type, &response);
+}
+
+void NavServer::HandleReportStuck(ClientHandler* handler, AnTcpMessageType type, const void* data, int size)
+{
+    ReportStuckData request{};
+
+    if (!ReadRequest(data, size, request))
+    {
+        LogTooSmall(handler, type, size, sizeof(request));
+        handler->SendDataVar(type, false);
+        return;
+    }
+
+    handler->SendDataVar(type, Navigation->ReportStuck(request.mapId, request.position, request.radius));
 }

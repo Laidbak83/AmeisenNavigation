@@ -26,9 +26,12 @@
     <ClInclude Include="src\NavSources\Anp\AnpQueryFilterProvider.hpp" />
     <ClInclude Include="src\Utils\Logger.hpp" />
     <ClInclude Include="src\NavSources\OffMesh\TileRebuilder.hpp" />
+    <ClInclude Include="src\NavSources\NavQueryFilter.hpp" />
+    <ClInclude Include="src\NavSources\AvoidZoneStore.hpp" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\AmeisenNavigation.cpp" />
     <ClCompile Include="src\PathRefinement.cpp" />
+    <ClCompile Include="src\Avoidance.cpp" />
   </ItemGroup>
 </Project>

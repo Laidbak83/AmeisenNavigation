@@ -14,6 +14,7 @@ add_executable(anav_e2e_tests
     E2EPipelineTests.cpp
     E2EMmapTests.cpp
     E2ERefinementTests.cpp
+    E2EAvoidanceTests.cpp
     E2EServerTests.cpp)
 target_link_libraries(anav_e2e_tests PRIVATE anav_server_lib anav_exporter_core anav_options)
 add_test(NAME e2e COMMAND anav_e2e_tests)

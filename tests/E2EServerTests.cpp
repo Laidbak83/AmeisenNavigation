@@ -1,6 +1,7 @@
 #include "TestFramework.hpp"
 
 #include <atomic>
+#include <cmath>
 #include <chrono>
 #include <cstring>
 #include <functional>
@@ -353,6 +354,86 @@ TEST_CASE(Server_RefinementFlagsAndTuningTrailer)
     CHECK(secondPoints[1].DistanceTo(firstPoints[1]) < 0.01f);
 }
 
+TEST_CASE(Server_AvoidZonesSteerAndStuckReports)
+{
+    ServerFixture server;
+    RawClient client(server.Port());
+    REQUIRE(client.Connected());
+
+    PathRequestData request = MakePathRequest();
+    request.start = Wow(-700.0f, 0.0f, -50.0f);
+    request.end = Wow(-400.0f, 0.0f, -50.0f);
+    const Vector3 center = Wow(-550.0f, 0.0f, -50.0f);
+
+    const auto closest = [&](const std::vector<Vector3>& points) {
+        float best = 1e9f;
+
+        for (size_t i = 1; i < points.size(); ++i)
+        {
+            for (int s = 0; s <= 50; ++s)
+            {
+                const Vector3 p = points[i - 1] + (points[i] - points[i - 1]) * (static_cast<float>(s) / 50.0f);
+                best = std::min(best, std::hypot(p.x - center.x, p.y - center.y));
+            }
+        }
+
+        return best;
+    };
+
+    // Zones: header + entries, answered with a bool.
+    struct ZonesPacket
+    {
+        AvoidZonesHeader header;
+        AvoidZoneData zone;
+    };
+
+    const ZonesPacket zones{{TestWorld::MAP_ID, 1}, {center, 15.0f, 20.0f}};
+    auto response = client.Request(MessageType::SET_AVOID_ZONES, zones);
+    REQUIRE(response.has_value() && response->size() == 1);
+    CHECK(response->at(0) == 1);
+
+    response = client.Request(MessageType::PATH, request);
+    REQUIRE(response.has_value());
+    CHECK(closest(AsVectors(*response)) >= 15.0f);
+
+    // Count larger than the payload: rejected.
+    const AvoidZonesHeader lying{TestWorld::MAP_ID, 3};
+    response = client.Request(MessageType::SET_AVOID_ZONES, lying);
+    REQUIRE(response.has_value() && response->size() == 1);
+    CHECK(response->at(0) == 0);
+
+    // Steer with one unit in the way.
+    struct SteerPacket
+    {
+        SteerRequestHeader header;
+        SteerUnitData unit;
+    };
+
+    SteerPacket steer{};
+    steer.header = {TestWorld::MAP_ID, Wow(-600.0f, 0.0f, -100.0f), Wow(7.0f, 0.0f, 0.0f), Wow(-500.0f, 0.0f, -100.0f),
+                    7.0f, 0.6f, 0.1f, 1};
+    steer.unit = {Wow(-596.0f, 0.0f, -100.0f), Wow(-7.0f, 0.0f, 0.0f), 0.6f};
+    response = client.Request(MessageType::STEER, steer);
+    REQUIRE(response.has_value() && response->size() == sizeof(SteerResponse));
+    SteerResponse result{};
+    std::memcpy(&result, response->data(), sizeof(result));
+    CHECK_EQ(result.ok, 1);
+    CHECK(result.velocity.IsFinite() && result.position.IsFinite());
+    CHECK(result.velocity.Length() > 1.0f);
+
+    // Stuck report, seen by another connection.
+    response = client.Request(MessageType::REPORT_STUCK, ReportStuckData{TestWorld::MAP_ID, center, 10.0f});
+    REQUIRE(response.has_value() && response->size() == 1);
+    CHECK(response->at(0) == 1);
+    CHECK_EQ(server.Get().Nav().GetGlobalZoneCount(TestWorld::MAP_ID), size_t{1});
+
+    RawClient other(server.Port());
+    REQUIRE(other.Connected());
+    response = other.Request(MessageType::PATH, request);
+    REQUIRE(response.has_value());
+    CHECK(closest(AsVectors(*response)) >= 10.0f);
+}
+
 TEST_CASE(Server_CastRayAndCastRayEx)
 {
     ServerFixture server;
@@ -557,7 +638,8 @@ TEST_CASE(Server_MalformedRequestsAlwaysGetAnAnswer)
     for (const MessageType type : {MessageType::PATH, MessageType::RANDOM_PATH, MessageType::MOVE_ALONG_SURFACE,
                                    MessageType::CAST_RAY, MessageType::RANDOM_POINT, MessageType::RANDOM_POINT_AROUND,
                                    MessageType::GET_HEIGHT, MessageType::CONFIGURE_FILTER, MessageType::CAST_RAY_EX,
-                                   MessageType::EXPLORE_POLY})
+                                   MessageType::EXPLORE_POLY, MessageType::SET_AVOID_ZONES, MessageType::STEER,
+                                   MessageType::REPORT_STUCK})
     {
         REQUIRE(client.SendRequest(static_cast<unsigned char>(type), &tiny, 1));
         CHECK(client.ReadResponse(static_cast<unsigned char>(type)).has_value());

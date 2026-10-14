@@ -32,6 +32,8 @@ struct AmeisenNavConfig
     float factionDangerCost = 3.0f;
     float randomPathMaxDistance = 1.0f;
     float roadCost = 0.75f;  // ANP roads, < 1 prefers them
+    float stuckZoneCost = 8.0f;   // REPORT_STUCK zones: travel cost multiplier
+    float stuckZoneRadius = 3.0f; // REPORT_STUCK zones: radius when the report gives none
     float waterCost = 1.6f;  // water, ocean
     int bezierCurvePoints = 8;
     int catmullRomSplinePoints = 4;
@@ -53,6 +55,7 @@ struct AmeisenNavConfig
     std::string mmapsPath = "./meshes/";
 #endif
     std::string preloadMaps = ""; // comma separated map ids loaded at startup, e.g. "0,1,530,571"
+    std::string avoidZonesFile = ""; // REPORT_STUCK zones are kept in this file (empty = not persisted)
     std::string parentMaps = "";  // MMAP files of a child map fall back to its parent's: "child:parent,...", e.g. "2552:0"
 
     // ── Serialization ────────────────────────────────────────────────
@@ -356,6 +359,8 @@ private:
             {"fFactionDangerCost", std::ref(factionDangerCost)},
             {"fRandomPathMaxDistance", std::ref(randomPathMaxDistance)},
             {"fRoadCost", std::ref(roadCost)},
+            {"fStuckZoneCost", std::ref(stuckZoneCost)},
+            {"fStuckZoneRadius", std::ref(stuckZoneRadius)},
             {"fWallMargin", std::ref(wallMargin)},
             {"fWaterCost", std::ref(waterCost)},
             {"iBezierCurvePoints", std::ref(bezierCurvePoints)},
@@ -369,6 +374,7 @@ private:
             {"iMaxSearchNodes", std::ref(maxSearchNodes)},
             {"iMmapFormat", std::ref(mmapFormat)},
             {"iPort", std::ref(port)},
+            {"sAvoidZonesFile", std::ref(avoidZonesFile)},
             {"sCustomMmapPattern", std::ref(customMmapPattern)},
             {"sCustomMmtilePattern", std::ref(customMmtilePattern)},
             {"sIp", std::ref(ip)},

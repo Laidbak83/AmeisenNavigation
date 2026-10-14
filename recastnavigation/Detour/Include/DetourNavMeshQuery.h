@@ -28,7 +28,8 @@
 // setting is to use non-virtual functions, the actual implementations of the functions
 // are declared as inline for maximum speed. 
 
-//#define DT_VIRTUAL_QUERYFILTER 1
+// AmeisenNavigation: enabled, clients use a derived filter (avoid zones, per area exclusion, see NavQueryFilter.hpp).
+#define DT_VIRTUAL_QUERYFILTER 1
 
 /// Defines polygon filtering and traversal costs for navigation mesh query operations.
 /// @ingroup detour

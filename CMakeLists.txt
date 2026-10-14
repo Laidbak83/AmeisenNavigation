@@ -163,7 +163,8 @@ endif()
 # ── AmeisenNavigation (core pathfinding library) ──
 
 add_library(anav_core STATIC ${CMAKE_CURRENT_SOURCE_DIR}/AmeisenNavigation/src/AmeisenNavigation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/AmeisenNavigation/src/PathRefinement.cpp)
+    ${CMAKE_CURRENT_SOURCE_DIR}/AmeisenNavigation/src/PathRefinement.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/AmeisenNavigation/src/Avoidance.cpp)
 target_include_directories(anav_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/AmeisenNavigation/src)
 target_link_libraries(anav_core PUBLIC anav_pack anav_recast Threads::Threads PRIVATE anav_options)
 

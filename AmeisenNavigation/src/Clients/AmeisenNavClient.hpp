@@ -12,6 +12,7 @@
 
 #include "../../../AmeisenNavigation.Pack/src/DetourUtils.hpp"
 #include "../NavSources/IQueryFilterProvider.hpp"
+#include "../NavSources/NavQueryFilter.hpp"
 #include "../Utils/Path.hpp"
 #include "ClientState.hpp"
 
@@ -44,8 +45,19 @@ class AmeisenNavClient
     ClientState State;
     const IQueryFilterProvider* FilterProvider;
 
-    // Per-client area cost overrides, empty = use the provider's default filter.
-    std::optional<dtQueryFilter> CustomFilter;
+    // Per-client area cost overrides and area rules, empty = use the provider's default filter.
+    std::optional<NavQueryFilter> CustomFilter;
+
+    // Avoid zones per map (RD coordinates) and the filters combining them with the global zones.
+    struct MapFilter
+    {
+        NavQueryFilter filter;
+        std::shared_ptr<const std::vector<AvoidZone>> global; // snapshot the filter was built with
+        bool dirty = true;
+    };
+
+    std::unordered_map<int, std::vector<AvoidZone>> Zones;
+    std::unordered_map<int, MapFilter> MapFilters;
 
     // Reusable buffers for path calculation.
     int PolyPathBufferSize;
@@ -79,10 +91,75 @@ public:
     ClientState GetClientState() const noexcept { return State; }
     bool HasCustomFilter() const noexcept { return CustomFilter.has_value(); }
 
-    /// The filter used for all queries of this client.
+    /// The filter of this client without avoid zones.
     const dtQueryFilter* QueryFilter() const noexcept
     {
         return CustomFilter ? &*CustomFilter : FilterProvider->Get(State);
+    }
+
+    /// The filter for queries on a map: QueryFilter() plus the client's and the global avoid zones of the map.
+    const dtQueryFilter* QueryFilter(int mapId, const std::shared_ptr<const std::vector<AvoidZone>>& global)
+    {
+        const auto own = Zones.find(mapId);
+        const bool hasOwn = own != Zones.end() && !own->second.empty();
+        const bool hasGlobal = global && !global->empty();
+
+        if (!hasOwn && !hasGlobal)
+        {
+            return QueryFilter();
+        }
+
+        try
+        {
+            MapFilter& entry = MapFilters[mapId];
+
+            if (entry.dirty || entry.global != global)
+            {
+                const dtQueryFilter* base = QueryFilter();
+                entry.filter.SetBase(*base);
+                entry.filter.SetAreaRules(CustomFilter ? CustomFilter->GetExcludedAreas() : 0,
+                                          CustomFilter ? CustomFilter->GetAllowedAreas() : 0);
+                entry.filter.SetZones(hasOwn ? std::span<const AvoidZone>(own->second) : std::span<const AvoidZone>(),
+                                      hasGlobal ? std::span<const AvoidZone>(*global) : std::span<const AvoidZone>());
+                entry.global = global;
+                entry.dirty = false;
+            }
+
+            return &entry.filter;
+        }
+        catch (...)
+        {
+            return QueryFilter();
+        }
+    }
+
+    /// Replace the client's avoid zones of a map (RD coordinates, empty = none). False if there are too many.
+    bool SetAvoidZones(int mapId, std::span<const AvoidZone> zones)
+    {
+        if (zones.size() > static_cast<size_t>(MAX_AVOID_ZONES))
+        {
+            return false;
+        }
+
+        if (zones.empty())
+        {
+            Zones.erase(mapId);
+            MapFilters.erase(mapId);
+        }
+        else
+        {
+            Zones[mapId].assign(zones.begin(), zones.end());
+            MapFilters[mapId].dirty = true;
+        }
+
+        ResetFollow();
+        return true;
+    }
+
+    std::span<const AvoidZone> GetAvoidZones(int mapId) const noexcept
+    {
+        const auto it = Zones.find(mapId);
+        return it != Zones.end() ? std::span<const AvoidZone>(it->second) : std::span<const AvoidZone>();
     }
 
     int GetPolyPathBufferSize() const noexcept { return PolyPathBufferSize; }
@@ -142,8 +219,8 @@ public:
         for (const auto& [areaId, cost] : costs)
         {
             // dtQueryFilter stores DT_MAX_AREAS costs, anything else would write out of bounds.
-            // Non-positive/infinite costs would break the A* search.
-            if (areaId >= DT_MAX_AREAS || !std::isfinite(cost) || cost <= 0.0f || cost > MAX_AREA_COST)
+            // Negative/infinite costs would break the A* search, 0 forbids the area.
+            if (areaId >= DT_MAX_AREAS || !std::isfinite(cost) || cost < 0.0f || cost > MAX_AREA_COST)
             {
                 return false;
             }
@@ -152,19 +229,39 @@ public:
         State = state;
         ResetFollow(); // the corridor was searched with the old costs
 
+        for (auto& entry : MapFilters)
+        {
+            entry.second.dirty = true;
+        }
+
         if (costs.empty())
         {
             CustomFilter.reset();
             return true;
         }
 
+        // Cost 0 forbids an area, a cost > 0 also allows it when the default filter excludes its polygons by flag
+        // (e.g. steep slopes on TrinityCore MMAPs, jump links).
         CustomFilter.emplace(*base);
+        uint64_t excluded = 0;
+        uint64_t allowed = 0;
 
         for (const auto& [areaId, cost] : costs)
         {
-            CustomFilter->setAreaCost(areaId, cost);
+            if (cost == 0.0f)
+            {
+                excluded |= uint64_t{1} << areaId;
+                allowed &= ~(uint64_t{1} << areaId);
+            }
+            else
+            {
+                CustomFilter->setAreaCost(areaId, cost);
+                allowed |= uint64_t{1} << areaId;
+                excluded &= ~(uint64_t{1} << areaId);
+            }
         }
 
+        CustomFilter->SetAreaRules(excluded, allowed);
         return true;
     }
 };

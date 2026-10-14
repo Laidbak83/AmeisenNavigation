@@ -60,6 +60,12 @@ AmeisenNavigation::AmeisenNavigation(const AmeisenNavigationSettings& settings) 
             std::make_unique<MmapQueryFilterProvider>(Settings.mmapFormat, Settings.waterCost, Settings.badLiquidCost);
         NavSource = std::move(mmapSource);
     }
+
+    if (!Settings.avoidZonesFile.empty())
+    {
+        const size_t zones = GlobalZones.Open(Settings.avoidZonesFile);
+        LogI("Loaded ", zones, " avoid zones from ", Settings.avoidZonesFile.string());
+    }
 }
 
 MmapFormat AmeisenNavigation::GetMmapFormat() const noexcept
@@ -141,12 +147,23 @@ bool AmeisenNavigation::GetPath(size_t clientId, int mapId, const Vector3& start
         return false;
     }
 
-    if (options)
+    const bool zones = HasZones(ctx.filter);
+
+    if (options || zones)
     {
-        Vector3 target;
-        endPosition.CopyToRDCoords(target);
         Path scratch(path.maxSize);
-        RefinePath(ctx.query, ctx.filter, path, target, *options, true, scratch);
+
+        if (zones)
+        {
+            LeadAroundZones(ctx.query, ctx.filter, path, scratch);
+        }
+
+        if (options)
+        {
+            Vector3 target;
+            endPosition.CopyToRDCoords(target);
+            RefinePath(ctx.query, ctx.filter, path, target, *options, true, scratch);
+        }
     }
 
     path.ToWowCoords();
@@ -177,17 +194,27 @@ bool AmeisenNavigation::GetRandomPath(size_t clientId, int mapId, const Vector3&
         return false;
     }
 
-    // Shortcut and stop distance before the jitter (they need the plain corners and their refs), the rest after.
-    Path scratch(options ? path.maxSize : 1);
+    // Zone detours, shortcut and stop distance before the jitter (they need the plain corners and their refs), the
+    // rest after.
+    const bool zones = HasZones(ctx.filter);
+    Path scratch(options || zones ? path.maxSize : 1);
     Vector3 target;
     endPosition.CopyToRDCoords(target);
 
-    if (options && (options->shortcut || options->tuning.stopDistance > 0.0f))
+    if (zones)
     {
-        PathOptions first;
-        first.shortcut = options->shortcut;
-        first.tuning.stopDistance = options->tuning.stopDistance;
-        RefinePath(ctx.query, ctx.filter, path, target, first, true, scratch);
+        LeadAroundZones(ctx.query, ctx.filter, path, scratch);
+    }
+
+    if (zones || (options && (options->shortcut || options->tuning.stopDistance > 0.0f)))
+    {
+        if (options)
+        {
+            PathOptions first;
+            first.shortcut = options->shortcut;
+            first.tuning.stopDistance = options->tuning.stopDistance;
+            RefinePath(ctx.query, ctx.filter, path, target, first, true, scratch);
+        }
 
         // The corner refs belong to the plain path.
         for (int i = 0; i < path.pointCount; ++i)
@@ -746,10 +773,16 @@ bool AmeisenNavigation::ExplorePolygon(size_t clientId, int mapId, const Vector3
         current = target;
     }
 
-    if (options && (options->avoidWalls || options->roundCorners) && path.pointCount > 2)
+    if (((options && (options->avoidWalls || options->roundCorners)) || HasZones(ctx.filter)) && path.pointCount > 1)
     {
         path.ToRdCoords();
-        RefinePath(ctx.query, ctx.filter, path, Vector3{}, *options, false, segment);
+        LeadAroundZones(ctx.query, ctx.filter, path, segment);
+
+        if (options)
+        {
+            RefinePath(ctx.query, ctx.filter, path, Vector3{}, *options, false, segment);
+        }
+
         path.ToWowCoords();
     }
 
@@ -785,7 +818,7 @@ AmeisenNavigation::QueryContext AmeisenNavigation::GetQueryContext(size_t client
         return {};
     }
 
-    ctx.filter = ctx.client->QueryFilter();
+    ctx.filter = ctx.client->QueryFilter(mapId, GlobalZones.Get(mapId));
 
     if (!ctx.filter)
     {

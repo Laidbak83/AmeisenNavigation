@@ -19,6 +19,7 @@
 #include "Helpers/Tour.hpp"
 #include "NavSources/Anp/AnpNavSource.hpp"
 #include "NavSources/Anp/AnpQueryFilterProvider.hpp"
+#include "NavSources/AvoidZoneStore.hpp"
 #include "NavSources/INavSource.hpp"
 #include "NavSources/Mmap/MmapNavSource.hpp"
 #include "NavSources/Mmap/MmapQueryFilterProvider.hpp"
@@ -110,7 +111,30 @@ struct AmeisenNavigationSettings
     float badLiquidCost = 4.0f; // lava and slime
     float roadCost = 0.75f;     // ANP roads (< 1 prefers roads)
     size_t maxIdleQueriesPerMap = 0; // dtNavMeshQuery objects kept per map between requests, 0 = automatic
+    std::filesystem::path avoidZonesFile; // REPORT_STUCK zones are loaded from / appended to this file (optional)
+    float stuckZoneRadius = 3.0f;        // radius of a stuck report that doesn't give one
+    float stuckZoneCost = 8.0f;          // cost multiplier of a stuck zone (raised by repeated reports)
 };
+
+/// A unit near a steering client (WoW coordinates).
+struct SteerUnit
+{
+    Vector3 position;
+    Vector3 velocity;
+    float radius = 0.5f;
+};
+
+/// Result of Steer (WoW coordinates).
+struct SteerResult
+{
+    Vector3 velocity; // velocity for the next tick (horizontal)
+    Vector3 position; // where that velocity leads on the navmesh after deltaTime
+};
+
+constexpr int MAX_STEER_UNITS = 32;
+constexpr float MAX_STEER_SPEED = 100.0f;
+constexpr float MAX_STEER_RADIUS = 10.0f;
+constexpr float MAX_STEER_DELTA_TIME = 5.0f;
 
 /// Per request path tuning (PATH, RANDOM_PATH, EXPLORE_POLY), see PathOptions.
 struct PathTuning
@@ -171,6 +195,8 @@ class AmeisenNavigation
 
     mutable std::shared_mutex ClientsMutex;
     std::unordered_map<size_t, std::shared_ptr<AmeisenNavClient>> Clients;
+
+    AvoidZoneStore GlobalZones;
 
     // Query pools per map, created with the first request for a map and never removed (navmeshes aren't either).
     mutable std::shared_mutex QueryPoolsMutex;
@@ -238,6 +264,22 @@ public:
 
     /// Walk the path along the navmesh surface (validates smoothed paths with chunking).
     bool PostProcessMoveAlongSurface(size_t clientId, int mapId, const Path& input, Path& output);
+
+    /// Replace a client's avoid zones on a map (centers in WoW coordinates, empty = remove). The search prefers
+    /// other ways and paths are led around them. False for invalid zones or too many.
+    bool SetAvoidZones(size_t clientId, int mapId, std::span<const AvoidZone> zones);
+
+    /// A client got stuck at a position: add a zone every client avoids from now on (persisted to avoidZonesFile).
+    /// radius <= 0 uses the configured default.
+    bool ReportStuck(int mapId, const Vector3& position, float radius);
+
+    /// Global (stuck) zones of a map.
+    size_t GetGlobalZoneCount(int mapId) const { return GlobalZones.Count(mapId); }
+
+    /// Local steering for one tick: the velocity towards target (along the navmesh path) that avoids the units, the
+    /// avoid zones and the navmesh borders (DetourCrowd obstacle avoidance), and the position it leads to.
+    bool Steer(size_t clientId, int mapId, const Vector3& position, const Vector3& velocity, const Vector3& target,
+               float maxSpeed, float radius, float deltaTime, std::span<const SteerUnit> units, SteerResult& result);
 
     void SmoothPathChaikinCurve(const Path& input, Path& output) const noexcept;
     void SmoothPathCatmullRom(const Path& input, Path& output, int points, float alpha) const noexcept;
@@ -355,4 +397,15 @@ private:
                                      float margin) noexcept;
     static void RoundCorners(const dtNavMeshQuery* query, const dtQueryFilter* filter, Path& path, float radius,
                              int points, Path& scratch) noexcept;
+
+    static bool HasZones(const dtQueryFilter* filter) noexcept
+    {
+        const auto* navFilter = dynamic_cast<const NavQueryFilter*>(filter);
+        return navFilter && !navFilter->GetZones().empty();
+    }
+
+    /// Lead path segments crossing an avoid zone of the filter around it (Avoidance.cpp). The search already prefers
+    /// other ways, but string pulling cuts across zones the corridor touches.
+    static void LeadAroundZones(const dtNavMeshQuery* query, const dtQueryFilter* filter, Path& path,
+                                Path& scratch) noexcept;
 };

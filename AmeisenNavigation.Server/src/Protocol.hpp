@@ -21,6 +21,9 @@
 ///                              + GetConfigResponseTrailer + server version bytes (protocol 2+)
 ///   CAST_RAY_EX             -> CastRayExResponse
 ///   EXPLORE_POLY            -> Vector3[] (a single zero vector on failure)
+///   SET_AVOID_ZONES         -> bool, request: AvoidZonesHeader + zoneCount AvoidZoneData
+///   STEER                   -> SteerResponse, request: SteerRequestHeader + unitCount SteerUnitData
+///   REPORT_STUCK            -> bool, request: ReportStuckData
 ///   unknown types           -> empty payload
 
 enum class MessageType : unsigned char
@@ -36,6 +39,9 @@ enum class MessageType : unsigned char
     GET_HEIGHT,          // Get the navmesh terrain height at a position
     GET_CONFIG,          // Get the server's configuration (meshes path, format, etc.)
     CAST_RAY_EX,         // Cast a movement ray and get hit position, normal and fraction
+    SET_AVOID_ZONES,     // Replace the connection's avoid zones on a map
+    STEER,               // Local steering: velocity for one tick avoiding units, zones and walls
+    REPORT_STUCK,        // Report a position where the client got stuck (a zone every client avoids)
 };
 
 enum class PathType
@@ -62,7 +68,8 @@ enum class PathRequestFlags : int
 /// Bumped whenever requests/responses are added or extended (reported by GET_CONFIG).
 ///   1: PATH ... CAST_RAY_EX
 ///   2: EXPLORE_POLY, PathRequestFlags::REQUIRE_COMPLETE, GET_CONFIG trailer
-///   3: AVOID_WALLS, SHORTCUT, ROUND_CORNERS, FOLLOW, PathTuningData trailer
+///   3: AVOID_WALLS, SHORTCUT, ROUND_CORNERS, FOLLOW, PathTuningData trailer, SET_AVOID_ZONES, STEER,
+///      REPORT_STUCK, CONFIGURE_FILTER cost 0 (forbid) / > 0 (allow areas excluded by default)
 constexpr int PROTOCOL_VERSION = 3;
 
 constexpr bool HasFlag(int flags, PathRequestFlags flag) noexcept { return (flags & static_cast<int>(flag)) != 0; }
@@ -145,6 +152,54 @@ struct ExplorePolyRequestHeader
     int pointCount;
 };
 
+/// Variable length: header followed by zoneCount AvoidZoneData (0 = remove the zones of the map).
+struct AvoidZonesHeader
+{
+    int mapId;
+    int zoneCount;
+};
+
+struct AvoidZoneData
+{
+    Vector3 center; // WoW coordinates
+    float radius;
+    float cost;     // travel cost multiplier inside (>= 1)
+};
+
+/// Variable length: header followed by unitCount SteerUnitData (nearby units to avoid).
+struct SteerRequestHeader
+{
+    int mapId;
+    Vector3 position;
+    Vector3 velocity; // current velocity
+    Vector3 target;
+    float maxSpeed;
+    float radius;     // of the steering unit
+    float deltaTime;  // tick length, the response position is where the velocity leads after it
+    int unitCount;
+};
+
+struct SteerUnitData
+{
+    Vector3 position;
+    Vector3 velocity;
+    float radius;
+};
+
+struct SteerResponse
+{
+    int ok;           // 1 = success, 0 = failure (no mesh, invalid input)
+    Vector3 velocity;
+    Vector3 position;
+};
+
+struct ReportStuckData
+{
+    int mapId;
+    Vector3 position;
+    float radius;     // <= 0: server default (fStuckZoneRadius)
+};
+
 struct FilterConfig
 {
     unsigned char areaId;
@@ -170,6 +225,10 @@ static_assert(sizeof(GetConfigResponseHeader) == 12);
 static_assert(sizeof(GetConfigResponseTrailer) == 12);
 static_assert(sizeof(ExplorePolyRequestHeader) == 28 && offsetof(ExplorePolyRequestHeader, pointCount) == 24);
 static_assert(sizeof(FilterConfig) == 8 && offsetof(FilterConfig, cost) == 4);
+static_assert(sizeof(AvoidZonesHeader) == 8 && sizeof(AvoidZoneData) == 20);
+static_assert(sizeof(SteerRequestHeader) == 56 && offsetof(SteerRequestHeader, unitCount) == 52);
+static_assert(sizeof(SteerUnitData) == 28 && sizeof(SteerResponse) == 28);
+static_assert(sizeof(ReportStuckData) == 20);
 static_assert(sizeof(ConfigureFilterHeader) == 8 && offsetof(ConfigureFilterHeader, filterConfigCount) == 4);
 
 /// Maximum number of filter entries in one CONFIGURE_FILTER request (one per Detour area).
