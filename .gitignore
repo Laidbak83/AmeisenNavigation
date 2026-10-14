@@ -14,6 +14,7 @@
 .int/
 *_wpftmp
 build/
+build-*/
 [Dd]ebug/
 [Dd]ebugPublic/
 [Rr]elease/
@@ -269,4 +270,5 @@ __pycache__/
 !.claude/settings.json
 !.claude/hooks/
 build/
+build-*/
 .int/

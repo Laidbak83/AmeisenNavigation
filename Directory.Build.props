@@ -6,4 +6,11 @@
     <IntermediateOutputPath>$(BaseIntermediateOutputPath)$(Configuration)\</IntermediateOutputPath>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
+  <!-- Same version as the C++ server and exporter: parsed from AmeisenNavigation.Pack/src/Version.hpp -->
+  <PropertyGroup>
+    <AnavVersion>$([System.Text.RegularExpressions.Regex]::Match($([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)AmeisenNavigation.Pack/src/Version.hpp')), '"(\d+\.\d+\.\d+\.\d+)"').Groups[1].Value)</AnavVersion>
+    <Version>$(AnavVersion)</Version>
+    <AssemblyVersion>$(AnavVersion)</AssemblyVersion>
+    <FileVersion>$(AnavVersion)</FileVersion>
+  </PropertyGroup>
 </Project>

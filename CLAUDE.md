@@ -54,12 +54,24 @@ positions with `TestWorld::Wow(rdX, rdY, rdZ)`.
 exactly one response, a zero vector on failure) → `AmeisenNavigation` methods → `GetQueryContext` (looks up the
 client, leases a `dtNavMeshQuery` from the map's `NavMeshQueryPool`; map ids are bounded in `NavMeshCache`) → Detour.
 Every position must pass `IsValidPosition` before reaching Detour (its float→int tile math is UB for NaN/huge
-values); `FindNearestPoly` and `ToValidRdCoords` enforce it. `AmeisenNavClient` holds per-connection state (query filter, path buffers) and is used by one thread
-at a time. `Protocol.hpp` must stay byte-compatible with `AmeisenNavigation.Client/WireFormat.cs` (static_asserts);
-bump `PROTOCOL_VERSION` when adding or extending messages.
+values); `FindNearestPoly` and `ToValidRdCoords` enforce it. `AmeisenNavClient` holds per-connection state (query filter, avoid zones,
+follow corridor, path buffers) and is used by one thread at a time. `Protocol.hpp` must stay byte-compatible with
+`AmeisenNavigation.Client/WireFormat.cs` (static_asserts; `WireSizes` is checked by the C# integration test); bump
+`PROTOCOL_VERSION` when adding or extending messages, extensions are optional trailers so old clients keep working.
+
+**Engine files.** `AmeisenNavigation.cpp` (queries, `CalculateNormalPath`, `Raycast` which casts from every polygon
+touching the start), `PathRefinement.cpp` (shortcut, wall margin, arcs, stop distance, follow corridor; every changed
+segment goes through `SegmentClear`, a step that fails is skipped), `Avoidance.cpp` (avoid zones, stuck reports,
+steering). Paths with off-mesh connections are refined in pieces between them (`RefineAll`, PathPointFlags): their
+ends never move. Client filters are `NavQueryFilter` (vendored Detour has `DT_VIRTUAL_QUERYFILTER` enabled): area
+exclusion (cost 0), allowed areas (cost > 0 bypasses the flag exclusion), avoid zone costs (grid when many).
+`TileRebuilder` turns loaded tiles back into `dtNavMeshCreateParams` to add off-mesh connections after loading (nav
+sources run a post-load hook: `sOffMeshFile`, automatic drops). Off-mesh area ids 40/41/42 and flags
+`NAV_JUMP`/`NAV_DROP` (`AnpFormat.hpp`) are shared by ANP and MMAP navmeshes; jumps are excluded by default.
 
 **Nav sources.** `AnpNavSource` (own format: zip with `mapId`, `params` and one Detour tile per `XX_YY` entry) and
-`MmapNavSource` (TrinityCore/SkyFire `.mmap`/`.mmtile`, format detected from file names). Maps load lazily once
+`MmapNavSource` (TrinityCore/SkyFire `.mmap`/`.mmtile`, format detected from file names, TrinityCore master's MMAP v16
+from the magic in front of the `.mmap`; child maps can fall back to their parent's files). Maps load lazily once
 (`NavMeshCache`). Every tile goes through `ValidateTileData` (all indices, finite coordinates, BV quantization range,
 tile coordinates) before `dtNavMesh::addTile` — Detour itself trusts tile data completely. ANP area ids
 (`AnpFormat.hpp`) come in {neutral, Alliance, Horde} triplets and are wire/file format: never renumber them.
@@ -73,8 +85,8 @@ rebuilt coarser when Detour's 65535 vertex limit is hit) → `AnpWriter`. The De
 grid (tile x = maxAdtX - adtX). WMO-only maps (dungeons) come from the WDT's global WMO.
 
 **Vendored code.** `recastnavigation/` and `AmeisenNavigation.Pack/src/miniz` carry local fixes marked with
-`AmeisenNavigation:` comments (null deref in `closestPointOnDetailEdges`, raycast iteration cap, miniz UB); keep them
-when updating upstream. Detour's `dtLink` array is only 4 byte aligned by format, so UBSan alignment checks are off
+`AmeisenNavigation:` comments (null deref in `closestPointOnDetailEdges`, raycast iteration cap, miniz UB,
+`DT_VIRTUAL_QUERYFILTER` enabled); keep them when updating upstream. Detour's `dtLink` array is only 4 byte aligned by format, so UBSan alignment checks are off
 for `anav_recast`.
 
 ## Tests

@@ -41,5 +41,10 @@ namespace AmeisenNavigation.Client
         public const byte LIQUID_SLIME = 25;
         public const byte ALLIANCE_LIQUID_SLIME = 26;
         public const byte HORDE_LIQUID_SLIME = 27;
+
+        // Off-mesh connections (ANP and MMAP navmeshes, protocol 3).
+        public const byte OFFMESH_JUMP = 40;
+        public const byte OFFMESH_DROP = 41;
+        public const byte OFFMESH_LINK = 42;
     }
 }

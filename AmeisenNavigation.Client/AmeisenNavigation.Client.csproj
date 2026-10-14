@@ -8,6 +8,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="ClientIntegration" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\AnTCP.Client\AnTCP.Client.csproj" />
   </ItemGroup>
 

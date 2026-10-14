@@ -18,6 +18,12 @@ namespace AmeisenNavigation.Client
         public readonly float DistanceTo2D(Vector3 b)
             => MathF.Sqrt((X - b.X) * (X - b.X) + (Y - b.Y) * (Y - b.Y));
 
+        public static Vector3 operator +(Vector3 a, Vector3 b) => new(a.X + b.X, a.Y + b.Y, a.Z + b.Z);
+        public static Vector3 operator -(Vector3 a, Vector3 b) => new(a.X - b.X, a.Y - b.Y, a.Z - b.Z);
+        public static Vector3 operator *(Vector3 a, float s) => new(a.X * s, a.Y * s, a.Z * s);
+
+        public readonly float Length => MathF.Sqrt(X * X + Y * Y + Z * Z);
+
         public static bool operator ==(Vector3 left, Vector3 right)
             => left.X == right.X && left.Y == right.Y && left.Z == right.Z;
 

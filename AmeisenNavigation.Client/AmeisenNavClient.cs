@@ -20,9 +20,11 @@ namespace AmeisenNavigation.Client
     /// nav.TryConnect();
     /// nav.SetClientState(ClientState.NormalAlliance);
     /// nav.SetAreaCosts(ground: 1f, road: 0.75f, water: 1.6f, badLiquid: 4f, hordeMult: 3f);
+    /// nav.SetCanSwim(false);
     /// nav.ApplyFilter();
     ///
-    /// var path = nav.GetPath(0, start, end);
+    /// var path = nav.GetPath(0, start, end, PathFlags.Fluid, new PathTuning(StopDistance: 4f));
+    /// var detailed = nav.GetPathEx(0, start, end); // where to jump or drop
     /// </code>
     /// </summary>
     public sealed class AmeisenNavClient : IDisposable
@@ -40,6 +42,10 @@ namespace AmeisenNavigation.Client
             GetHeight,
             GetConfig,
             CastRayEx,
+            SetAvoidZones,
+            Steer,
+            ReportStuck,
+            PathEx,
         }
 
         private readonly AnTcpClient _client;
@@ -47,6 +53,10 @@ namespace AmeisenNavigation.Client
 
         private ClientState _state;
         private readonly float[] _areaCosts = new float[28]; // index 0 unused, 1-27 = area costs
+        private float _allyMult = 1f;
+        private float _hordeMult = 1f;
+        private readonly Dictionary<TerrainType, float> _terrainCosts = new();
+        private readonly Dictionary<int, AvoidZone[]> _avoidZones = new();
         private bool _wasConnected;
         private ServerConfig? _serverConfig;
         private bool _disposed;
@@ -137,18 +147,138 @@ namespace AmeisenNavigation.Client
 
         /// <summary>
         /// Find a straight path from start to end. Returns null on failure.
+        /// <paramref name="tuning"/> (protocol 3) adjusts the refinement flags and the stop distance.
         /// </summary>
-        public Vector3[]? GetPath(int mapId, Vector3 start, Vector3 end, PathFlags flags = PathFlags.None)
+        public Vector3[]? GetPath(int mapId, Vector3 start, Vector3 end, PathFlags flags = PathFlags.None,
+                                  PathTuning? tuning = null)
         {
-            return SendPathRequest(MessageType.Path, mapId, start, end, flags);
+            return SendPathRequest(MessageType.Path, mapId, start, end, flags, tuning);
         }
 
         /// <summary>
         /// Find a path with randomized waypoints (human-like movement). Returns null on failure.
         /// </summary>
-        public Vector3[]? GetRandomPath(int mapId, Vector3 start, Vector3 end, PathFlags flags = PathFlags.None)
+        public Vector3[]? GetRandomPath(int mapId, Vector3 start, Vector3 end, PathFlags flags = PathFlags.None,
+                                        PathTuning? tuning = null)
         {
-            return SendPathRequest(MessageType.RandomPath, mapId, start, end, flags);
+            return SendPathRequest(MessageType.RandomPath, mapId, start, end, flags, tuning);
+        }
+
+        /// <summary>
+        /// Find a path and get what each point is: where to jump or drop (off-mesh connections) and whether the end
+        /// is reachable. <see cref="PathFlags.Randomize"/> adds random offsets. Returns null on failure.
+        /// Requires protocol version 3 (server 1.10+).
+        /// </summary>
+        public PathResult? GetPathEx(int mapId, Vector3 start, Vector3 end, PathFlags flags = PathFlags.None,
+                                     PathTuning? tuning = null)
+        {
+            lock (_lock)
+            {
+                return SendWithReconnect<PathResult?>(() =>
+                {
+                    var response = Send(MessageType.PathEx, MakePathRequest(mapId, start, end, flags, tuning));
+                    return ParsePathEx(response.Data);
+                }, null);
+            }
+        }
+
+        /// <summary>
+        /// Replace this connection's avoid zones on a map (empty list = none). The search prefers other ways and
+        /// paths are led around them. The zones are sent again after a reconnect. Up to 64 zones per map.
+        /// Requires protocol version 3.
+        /// </summary>
+        public bool SetAvoidZones(int mapId, IReadOnlyList<AvoidZone> zones)
+        {
+            if (zones == null || zones.Count > MaxAvoidZones)
+                return false;
+
+            var copy = new AvoidZone[zones.Count];
+
+            for (int i = 0; i < copy.Length; i++)
+                copy[i] = zones[i];
+
+            lock (_lock)
+            {
+                if (copy.Length == 0)
+                    _avoidZones.Remove(mapId);
+                else
+                    _avoidZones[mapId] = copy;
+
+                return SendWithReconnect(() => SendAvoidZonesInternal(mapId, copy), false);
+            }
+        }
+
+        /// <summary>Remove this connection's avoid zones on a map.</summary>
+        public bool ClearAvoidZones(int mapId) => SetAvoidZones(mapId, Array.Empty<AvoidZone>());
+
+        /// <summary>Maximum number of avoid zones per map.</summary>
+        public const int MaxAvoidZones = 64;
+
+        /// <summary>Maximum number of units passed to <see cref="Steer"/>.</summary>
+        public const int MaxSteerUnits = 32;
+
+        /// <summary>
+        /// Local steering for one tick: the velocity towards <paramref name="target"/> (along the navmesh path) that
+        /// avoids the <paramref name="units"/> (up to 32), the avoid zones and the navmesh borders, and the position
+        /// it leads to after <paramref name="deltaTime"/> seconds. Requires protocol version 3.
+        /// </summary>
+        public SteerResult Steer(int mapId, Vector3 position, Vector3 velocity, Vector3 target, float maxSpeed,
+                                 float radius = 0.5f, float deltaTime = 0.1f, IReadOnlyList<SteerUnit>? units = null)
+        {
+            int unitCount = units?.Count ?? 0;
+
+            if (unitCount > MaxSteerUnits)
+                return default;
+
+            var header = new SteerRequestHeader
+            {
+                MapId = mapId,
+                Position = position,
+                Velocity = velocity,
+                Target = target,
+                MaxSpeed = maxSpeed,
+                Radius = radius,
+                DeltaTime = deltaTime,
+                UnitCount = unitCount,
+            };
+
+            int headerSize = Marshal.SizeOf<SteerRequestHeader>();
+            int unitSize = Marshal.SizeOf<SteerUnitData>();
+            byte[] buffer = new byte[headerSize + unitCount * unitSize];
+            MemoryMarshal.Write(buffer.AsSpan(0, headerSize), in header);
+
+            for (int i = 0; i < unitCount; i++)
+            {
+                var unit = new SteerUnitData { Position = units![i].Position, Velocity = units[i].Velocity, Radius = units[i].Radius };
+                MemoryMarshal.Write(buffer.AsSpan(headerSize + i * unitSize, unitSize), in unit);
+            }
+
+            lock (_lock)
+            {
+                return SendWithReconnect(() =>
+                {
+                    var response = _client.SendBytes((byte)MessageType.Steer, buffer);
+
+                    if (!response.TryAs(out SteerResponse result) || result.Ok == 0)
+                        return default;
+
+                    return new SteerResult(true, result.Velocity, result.Position);
+                }, default(SteerResult));
+            }
+        }
+
+        /// <summary>
+        /// Report a position where the bot got stuck: the server adds a zone every client avoids from now on (and
+        /// keeps it if it has an avoid zone file). <paramref name="radius"/> 0 uses the server's default.
+        /// Requires protocol version 3.
+        /// </summary>
+        public bool ReportStuck(int mapId, Vector3 position, float radius = 0f)
+        {
+            lock (_lock)
+            {
+                var request = new ReportStuckData { MapId = mapId, Position = position, Radius = radius };
+                return SendWithReconnect(() => _client.Send((byte)MessageType.ReportStuck, request).As<bool>(), false);
+            }
         }
 
         /// <summary>Maximum number of polygon vertices accepted by <see cref="ExplorePolygon"/>.</summary>
@@ -163,7 +293,7 @@ namespace AmeisenNavigation.Client
         /// </summary>
         /// <param name="spacing">Distance between waypoints, e.g. twice the sight/gather range (min 2).</param>
         public Vector3[]? ExplorePolygon(int mapId, Vector3 start, IReadOnlyList<Vector3> polygon, float spacing,
-                                         PathFlags flags = PathFlags.None)
+                                         PathFlags flags = PathFlags.None, PathTuning? tuning = null)
         {
             if (polygon == null || polygon.Count < 3 || polygon.Count > MaxExplorePolygonPoints
                 || !float.IsFinite(spacing))
@@ -180,7 +310,8 @@ namespace AmeisenNavigation.Client
 
             int headerSize = Marshal.SizeOf<ExplorePolyRequestHeader>();
             int pointSize = Marshal.SizeOf<Vector3>();
-            byte[] buffer = new byte[headerSize + polygon.Count * pointSize];
+            int tuningSize = tuning.HasValue ? Marshal.SizeOf<PathTuningData>() : 0;
+            byte[] buffer = new byte[headerSize + polygon.Count * pointSize + tuningSize];
 
             MemoryMarshal.Write(buffer.AsSpan(0, headerSize), in header);
 
@@ -188,6 +319,12 @@ namespace AmeisenNavigation.Client
             {
                 Vector3 point = polygon[i];
                 MemoryMarshal.Write(buffer.AsSpan(headerSize + i * pointSize, pointSize), in point);
+            }
+
+            if (tuning.HasValue)
+            {
+                PathTuningData trailer = ToWire(tuning.Value);
+                MemoryMarshal.Write(buffer.AsSpan(headerSize + polygon.Count * pointSize, tuningSize), in trailer);
             }
 
             lock (_lock)
@@ -374,6 +511,9 @@ namespace AmeisenNavigation.Client
         private void SetAreaCostsUnlocked(float ground, float road, float water, float badLiquid,
                                           float allyMult, float hordeMult)
         {
+            _allyMult = allyMult;
+            _hordeMult = hordeMult;
+
             // Ground
             _areaCosts[AnpArea.TERRAIN_GROUND] = ground;
             _areaCosts[AnpArea.ALLIANCE_TERRAIN_GROUND] = ground * allyMult;
@@ -423,6 +563,56 @@ namespace AmeisenNavigation.Client
         }
 
         /// <summary>
+        /// Cost of a surface category, translated to the area ids of the server's navmesh format. 0 forbids it
+        /// (e.g. no water for a bot that can't swim), a cost above 0 also allows a category the server excludes by
+        /// default (steep slopes on TrinityCore MMAPs, jumps). On ANP servers Ground/Road/Water/BadLiquid replace the
+        /// category's cost of <see cref="SetAreaCosts"/> (faction multipliers still apply). Call
+        /// <see cref="ApplyFilter"/> to send. Requires protocol version 3, older servers only get the ANP costs.
+        /// </summary>
+        public void SetTerrainCost(TerrainType type, float cost)
+        {
+            if (!float.IsFinite(cost) || cost < 0f)
+                return;
+
+            lock (_lock)
+            {
+                _terrainCosts[type] = cost;
+                IsFilterDirty = true;
+            }
+        }
+
+        /// <summary>Back to the server's default for a category. Call <see cref="ApplyFilter"/> to send.</summary>
+        public void ClearTerrainCost(TerrainType type)
+        {
+            lock (_lock)
+            {
+                IsFilterDirty |= _terrainCosts.Remove(type);
+            }
+        }
+
+        /// <summary>Back to the server's defaults for all categories. Call <see cref="ApplyFilter"/> to send.</summary>
+        public void ClearTerrainCosts()
+        {
+            lock (_lock)
+            {
+                IsFilterDirty |= _terrainCosts.Count > 0;
+                _terrainCosts.Clear();
+            }
+        }
+
+        /// <summary>
+        /// A bot that can't swim never gets a path through water (water cost 0), true goes back to the default.
+        /// Call <see cref="ApplyFilter"/> to send.
+        /// </summary>
+        public void SetCanSwim(bool canSwim)
+        {
+            if (canSwim)
+                ClearTerrainCost(TerrainType.Water);
+            else
+                SetTerrainCost(TerrainType.Water, 0f);
+        }
+
+        /// <summary>
         /// Send the current filter configuration to the server.
         /// Returns true on success. Call this after changing state or area costs.
         /// The ANP area costs are only sent to servers using ANP navmeshes, MMAP servers
@@ -438,21 +628,14 @@ namespace AmeisenNavigation.Client
 
         // ── Internals ───────────────────────────────────────────────────
 
-        private Vector3[]? SendPathRequest(MessageType type, int mapId, Vector3 start, Vector3 end, PathFlags flags)
+        private Vector3[]? SendPathRequest(MessageType type, int mapId, Vector3 start, Vector3 end, PathFlags flags,
+                                           PathTuning? tuning)
         {
             lock (_lock)
             {
                 return SendWithReconnect(() =>
                 {
-                    var request = new PathRequestData
-                    {
-                        MapId = mapId,
-                        Flags = (int)flags,
-                        Start = start,
-                        End = end,
-                    };
-
-                    var points = _client.Send((byte)type, request).AsArray<Vector3>();
+                    var points = Send(type, MakePathRequest(mapId, start, end, flags, tuning)).AsArray<Vector3>();
                     if (points.Length == 0) return null;
 
                     // Server returns a single zero vector on failure
@@ -461,6 +644,111 @@ namespace AmeisenNavigation.Client
                     return points;
                 }, null);
             }
+        }
+
+        private static PathTuningData ToWire(PathTuning tuning) => new()
+        {
+            WallMargin = tuning.WallMargin,
+            CornerRadius = tuning.CornerRadius,
+            CornerPoints = tuning.CornerPoints,
+            StopDistance = tuning.StopDistance,
+        };
+
+        /// <summary>PathRequestData, with the tuning trailer if given (older servers ignore extra bytes).</summary>
+        private static byte[] MakePathRequest(int mapId, Vector3 start, Vector3 end, PathFlags flags, PathTuning? tuning)
+        {
+            var request = new PathRequestData { MapId = mapId, Flags = (int)flags, Start = start, End = end };
+
+            if (!tuning.HasValue)
+            {
+                byte[] plain = new byte[Marshal.SizeOf<PathRequestData>()];
+                MemoryMarshal.Write(plain, in request);
+                return plain;
+            }
+
+            var withTuning = new PathRequestWithTuning { Request = request, Tuning = ToWire(tuning.Value) };
+            byte[] buffer = new byte[Marshal.SizeOf<PathRequestWithTuning>()];
+            MemoryMarshal.Write(buffer, in withTuning);
+            return buffer;
+        }
+
+        private AnTCP.Client.Objects.AnTcpResponse Send(MessageType type, byte[] payload)
+            => _client.SendBytes((byte)type, payload);
+
+        /// <summary>PATH_EX: header(pointCount, resultFlags), pointCount Vector3, pointCount flag bytes.</summary>
+        private static PathResult? ParsePathEx(ReadOnlySpan<byte> data)
+        {
+            int headerSize = Marshal.SizeOf<PathExResponseHeader>();
+
+            if (data.Length < headerSize)
+                return null;
+
+            var header = MemoryMarshal.Read<PathExResponseHeader>(data);
+            int pointSize = Marshal.SizeOf<Vector3>();
+
+            if (header.PointCount <= 0 || data.Length != headerSize + (long)header.PointCount * (pointSize + 1))
+                return null;
+
+            var points = MemoryMarshal.Cast<byte, Vector3>(data.Slice(headerSize, header.PointCount * pointSize)).ToArray();
+            var flagBytes = data.Slice(headerSize + header.PointCount * pointSize, header.PointCount);
+            var flags = new PathPointFlags[header.PointCount];
+
+            for (int i = 0; i < flags.Length; i++)
+                flags[i] = (PathPointFlags)flagBytes[i];
+
+            return new PathResult(points, flags, (header.ResultFlags & 1) != 0);
+        }
+
+        private bool SendAvoidZonesInternal(int mapId, AvoidZone[] zones)
+        {
+            int headerSize = Marshal.SizeOf<AvoidZonesHeader>();
+            int zoneSize = Marshal.SizeOf<AvoidZoneData>();
+            byte[] buffer = new byte[headerSize + zones.Length * zoneSize];
+            var header = new AvoidZonesHeader { MapId = mapId, ZoneCount = zones.Length };
+            MemoryMarshal.Write(buffer.AsSpan(0, headerSize), in header);
+
+            for (int i = 0; i < zones.Length; i++)
+            {
+                var zone = new AvoidZoneData { Center = zones[i].Center, Radius = zones[i].Radius, Cost = zones[i].Cost };
+                MemoryMarshal.Write(buffer.AsSpan(headerSize + i * zoneSize, zoneSize), in zone);
+            }
+
+            return _client.SendBytes((byte)MessageType.SetAvoidZones, buffer).As<bool>();
+        }
+
+        /// <summary>Area ids of a terrain category for the server's navmesh format.</summary>
+        private static byte[] TerrainAreas(TerrainType type, ServerConfig config)
+        {
+            switch (type)
+            {
+                case TerrainType.Jump: return [AnpArea.OFFMESH_JUMP];
+                case TerrainType.Drop: return [AnpArea.OFFMESH_DROP];
+                case TerrainType.Link: return [AnpArea.OFFMESH_LINK];
+            }
+
+            if (config.UseAnpFileFormat)
+                return []; // ANP categories go through the cost table
+
+            if (config.MmapFormat == 2) // SkyFire 5.4.8: ground 1, magma 2, slime 4, water 8
+            {
+                return type switch
+                {
+                    TerrainType.Ground => [1],
+                    TerrainType.BadLiquid => [2, 4],
+                    TerrainType.Water => [8],
+                    _ => [],
+                };
+            }
+
+            // TrinityCore: ground 11, steep 10, water 9, magma/slime 8
+            return type switch
+            {
+                TerrainType.Ground => [11],
+                TerrainType.Steep => [10],
+                TerrainType.Water => [9],
+                TerrainType.BadLiquid => [8],
+                _ => [],
+            };
         }
 
         /// <summary>
@@ -526,6 +814,12 @@ namespace AmeisenNavigation.Client
                         _serverConfig = null;
                         try { ApplyFilterInternal(); } catch { }
 
+                        // Avoid zones are per connection on the server.
+                        foreach (var (mapId, zones) in _avoidZones)
+                        {
+                            try { SendAvoidZonesInternal(mapId, zones); } catch { }
+                        }
+
                         return true;
                     }
                 }
@@ -543,22 +837,64 @@ namespace AmeisenNavigation.Client
             // ANP area ids mean different areas on MMAP servers (e.g. 8/9 are lava/water in TrinityCore meshes),
             // only send the costs when the server confirmed it uses ANP navmeshes, otherwise just the state.
             _serverConfig ??= QueryConfigInternal();
-            int entryCount = _serverConfig is { UseAnpFileFormat: true } ? 27 : 0;
+            var entries = new SortedDictionary<byte, float>();
+
+            if (_serverConfig is { UseAnpFileFormat: true })
+            {
+                var costs = (float[])_areaCosts.Clone();
+
+                // Terrain categories replace the category's base cost (faction multipliers still apply), 0 forbids.
+                if (_serverConfig.ProtocolVersion >= 3)
+                {
+                    void Category(TerrainType type, byte first, bool factions)
+                    {
+                        if (!_terrainCosts.TryGetValue(type, out float cost))
+                            return;
+
+                        costs[first] = cost;
+                        costs[first + 1] = factions ? cost * _allyMult : cost;
+                        costs[first + 2] = factions ? cost * _hordeMult : cost;
+                    }
+
+                    Category(TerrainType.Ground, AnpArea.TERRAIN_GROUND, true);
+                    Category(TerrainType.Ground, AnpArea.TERRAIN_CITY, true);
+                    Category(TerrainType.Ground, AnpArea.WMO, true);
+                    Category(TerrainType.Ground, AnpArea.DOODAD, true);
+                    Category(TerrainType.Road, AnpArea.TERRAIN_ROAD, true);
+                    Category(TerrainType.Water, AnpArea.LIQUID_WATER, true);
+                    Category(TerrainType.Water, AnpArea.LIQUID_OCEAN, true);
+                    Category(TerrainType.BadLiquid, AnpArea.LIQUID_LAVA, false);
+                    Category(TerrainType.BadLiquid, AnpArea.LIQUID_SLIME, false);
+                }
+
+                for (byte area = 1; area <= 27; area++)
+                    entries[area] = costs[area];
+            }
+
+            // Old servers reject cost 0 and don't know the categories.
+            if (_serverConfig is { ProtocolVersion: >= 3 })
+            {
+                foreach (var (type, cost) in _terrainCosts)
+                {
+                    foreach (byte area in TerrainAreas(type, _serverConfig))
+                        entries[area] = cost;
+                }
+            }
 
             // Wire format: [state(1)+pad(3)][count(4)][entries: {areaId(1)+pad(3)+cost(4)} x N]
             const int headerSize = 8;
             const int entrySize = 8;
-            byte[] buffer = new byte[headerSize + entryCount * entrySize];
+            byte[] buffer = new byte[headerSize + entries.Count * entrySize];
 
             buffer[0] = (byte)_state;
-            BitConverter.GetBytes(entryCount).CopyTo(buffer, 4);
+            BitConverter.GetBytes(entries.Count).CopyTo(buffer, 4);
+            int index = 0;
 
-            for (int i = 0; i < entryCount; i++)
+            foreach (var (areaId, cost) in entries)
             {
-                int off = headerSize + i * entrySize;
-                byte areaId = (byte)(i + 1);
+                int off = headerSize + index++ * entrySize;
                 buffer[off] = areaId;
-                BitConverter.GetBytes(_areaCosts[areaId]).CopyTo(buffer, off + 4);
+                BitConverter.GetBytes(cost).CopyTo(buffer, off + 4);
             }
 
             bool result = _client.SendBytes((byte)MessageType.ConfigureFilter, buffer).As<bool>();

@@ -5,8 +5,9 @@
 TCP navigation server and navmesh exporter for World of Warcraft bots (built for the AmeisenBotX), based on
 [recastnavigation](https://github.com/recastnavigation/recastnavigation). Runs on **Windows and Linux**.
 
-- **AmeisenNavigation.Server**: answers path, raycast, height and random point queries over a tiny binary TCP protocol.
-  Serves TrinityCore/SkyFire **MMAPs** or its own **ANP** navmeshes.
+- **AmeisenNavigation.Server**: answers path, raycast, height, steering and random point queries over a tiny binary
+  TCP protocol. Serves TrinityCore (3.3.5a and **master**: retail and classic clients) and SkyFire **MMAPs** or its own
+  **ANP** navmeshes.
 - **AmeisenNavigation.Exporter**: builds ANP navmeshes straight from the game's MPQ archives, with area types for
   terrain, roads, cities, WMOs, doodads, water/ocean/lava/slime and Alliance/Horde territory.
 - **AmeisenNavigation.Client** (C#): client library with auto reconnect, used by the bot and the WPF tester.
@@ -14,6 +15,12 @@ TCP navigation server and navmesh exporter for World of Warcraft bots (built for
 ## Features 🚀
 
 - Straight and randomized paths, path smoothing (Chaikin, Catmull-Rom, Bezier) with optional navmesh validation
+- Path refinement on the navmesh: shortcuts, distance to walls, round corners, stop in range of a target (melee or
+  casting range, with line of sight), stable corners while following a path; every changed segment is verified
+- Off-mesh connections: where to jump, drop down or take a custom link (`PATH_EX`), from TrinityCore's `offmesh.txt`
+  format and automatic drop-down links from ledges
+- Avoid zones per client (danger areas), shared stuck reports (places bots got stuck are avoided by everyone), terrain
+  rules (forbid water for a bot that can't swim, allow steep slopes), local steering around other units
 - Move small deltas along the navmesh surface, movement raycasts (with hit position and wall normal)
 - Ground height queries that pick the right floor (bridges, buildings, caves)
 - Random points on the mesh / around a position
@@ -28,7 +35,8 @@ TCP navigation server and navmesh exporter for World of Warcraft bots (built for
 1. Download the latest [release](https://github.com/Jnnshschl/AmeisenNavigation/releases) (or build it, see below).
 2. Get navmeshes:
    - **ANP** (recommended): export them with the exporter (see [Exporter](#exporter)).
-   - **MMAP**: generate them with the TrinityCore `mmaps_generator` (or SkyFire for 5.4.8).
+   - **MMAP**: generate them with the TrinityCore `mmaps_generator` (or SkyFire for 5.4.8). For recent clients
+     (retail/classic, CASC) see [Recent clients](#recent-clients-casc).
 3. Start the server once, it creates `config.cfg` next to the executable. Set `sMmapsPath` (and `bUseAnpFileFormat=1`
    for ANP navmeshes), then start it again. A different config file can be passed as first argument.
 
@@ -50,7 +58,8 @@ docker run -d -p 47110:47110 -v /srv/meshes:/meshes:ro ameisennav
 | `sIp` / `iPort` | `127.0.0.1` / `47110` | Listen address and port |
 | `sMmapsPath` | `C:\meshes\` (`./meshes/` on Linux) | Folder with the `.anp` or `.mmap`/`.mmtile` files |
 | `bUseAnpFileFormat` | `0` | `1` = ANP navmeshes from the exporter, `0` = MMAPs |
-| `iMmapFormat` | `0` | `0` auto detect, `1` TrinityCore 3.3.5a, `2` SkyFire 5.4.8, `-1` custom patterns |
+| `iMmapFormat` | `0` | `0` auto detect, `1` TrinityCore 3.3.5a, `2` SkyFire 5.4.8, `3` TrinityCore master (MMAP v16), `-1` custom patterns |
+| `sParentMaps` | empty | MMAPs: `child:parent` map pairs (Map.db2 ParentMapID), a child map without its own files uses the parent's, e.g. `2552:0` |
 | `sCustomMmapPattern` / `sCustomMmtilePattern` | TC 3.3.5a names | `std::format` patterns for `iMmapFormat=-1` (args: mapId, x, y) |
 | `sPreloadMaps` | empty | Comma separated map ids loaded at startup, e.g. `0,1,530,571` |
 | `iMaxPolyPath` | `2048` | Max polygons of a path corridor |
@@ -60,6 +69,12 @@ docker run -d -p 47110:47110 -v /srv/meshes:/meshes:ro ameisennav
 | `fWaterCost` / `fBadLiquidCost` | `1.6` / `4.0` | Default costs of water/ocean and lava/slime (ANP and MMAP) |
 | `fRoadCost` | `0.75` | Default cost of roads (ANP, < 1 prefers roads) |
 | `fRandomPathMaxDistance` | `1.0` | Max offset of randomized path corners |
+| `fWallMargin` | `1.0` | Distance of corners from the walls they bend around (flag `64`) |
+| `fCornerRadius` / `iCornerPoints` | `2.0` / `4` | Arcs replacing corners (flag `256`) |
+| `sOffMeshFile` | empty | Off-mesh connections in TrinityCore's `offmesh.txt` format, added when a map loads |
+| `fAutoDropHeight` / `fAutoDropReach` | `0` / `2.0` | One way drop-down links from ledges up to this height (`0` = off), landing up to this far beyond the ledge (see below) |
+| `sAvoidZonesFile` | empty | Stuck reports (`REPORT_STUCK`) are kept in this file and loaded again at startup |
+| `fStuckZoneRadius` / `fStuckZoneCost` | `3.0` / `8.0` | Radius (when the report has none) and cost multiplier of stuck zones |
 | `iCatmullRomSplinePoints` / `fCatmullRomSplineAlpha` | `4` / `0.5` | Catmull-Rom samples per segment / parametrization |
 | `iBezierCurvePoints` | `8` | Bezier samples per curve |
 | `iMaxClients` | `1024` | Simultaneous connections (one thread each), further ones are refused, `0` = unlimited |
@@ -97,6 +112,29 @@ extracts terrain, liquids, WMOs and doodads, and builds one Detour tile per ADT:
 - Area ids (see `AmeisenNavigation.Pack/src/AnpFormat.hpp`) come in {neutral, Alliance, Horde} triplets for ground,
   road, city, WMO, doodad, water, ocean, lava and slime.
 
+## Recent clients (CASC)
+
+Clients since Legion (7.0, retail and the classic flavours) store their data in CASC instead of MPQ archives. The
+exporter reads MPQs only; for CASC clients the extraction is left to TrinityCore's tools, which follow every client
+build:
+
+1. Build TrinityCore master's tools only (`cmake -DTOOLS=1 -DSERVERS=0`, see TrinityCore's install guide):
+   `mapextractor`, `vmap4extractor`, `vmap4assembler`, `mmaps_generator`.
+2. In the client folder: `mapextractor`, `vmap4extractor`, `vmap4assembler Buildings vmaps`, then `mmaps_generator`.
+   If the extractors fail to read the map list, the client build changed a DB2 layout: see
+   [DB2 layouts](#db2-layouts) below.
+3. Point the server at the `mmaps` folder (`sMmapsPath`), `iMmapFormat=0` detects TrinityCore master (MMAP v16) from
+   the magic in front of the `.mmap` files (or set `3`). Child maps (phases) without their own files can use their
+   parent's with `sParentMaps`.
+
+### DB2 layouts
+
+The extractors read `Map.db2` (and a few others) with layouts compiled into
+`src/tools/extractor_common/ExtractorDB2LoadInfo.h`. A client build that adds a field changes the layout hash and
+the field count, the extractor then refuses the file. Example from build 70245 (classic): `Map.db2` got
+`OceanLiquidTypeID` before `NavigationMaxDistance`, 25 -> 26 fields, layout hash `0x75863E23` -> `0xD43AFAC3`.
+The new field list comes from the WoWDBDefs definitions (`Map.dbd`, github.com/wowdev/WoWDBDefs) for the build.
+
 ## Protocol
 
 Every message (both directions) is framed as `int32 size | uint8 type | payload[size - 1]` (little endian). Every
@@ -115,12 +153,55 @@ request gets exactly one response with the same type. Positions are WoW coordina
 | `8` GET_HEIGHT | `int mapId, Vector3 position` | `Vector3` on the mesh (zero on failure) |
 | `9` GET_CONFIG | - | `int mmapFormat, int useAnp, int pathLength, char path[]`, then `int protocolVersion, int maxPointPath, int versionLength, char version[]` |
 | `10` CAST_RAY_EX | `int mapId, Vector3 start, Vector3 end` | `int hit (1/0/-1 error), float t, Vector3 position, Vector3 normal` |
+| `11` SET_AVOID_ZONES | `int mapId, int count, {Vector3 center, float radius, float cost}[count]` (count 0 = none) | `bool` |
+| `12` STEER | `int mapId, Vector3 position, Vector3 velocity, Vector3 target, float maxSpeed, float radius, float deltaTime, int count, {Vector3 position, Vector3 velocity, float radius}[count]` | `int ok, Vector3 velocity, Vector3 position` |
+| `13` REPORT_STUCK | `int mapId, Vector3 position, float radius` (`<= 0` = default) | `bool` |
+| `14` PATH_EX | same as PATH | `int count, int resultFlags (1 = partial), Vector3 points[count], uint8 pointFlags[count]` (count 0 on failure) |
 
 Path flags: `1` Chaikin, `2` Catmull-Rom, `4` Bezier (one smoothing), `8` validate with closest point on poly,
 `16` validate with move along surface, `32` require a complete path (fail if the end is unreachable instead of
-returning a path to the closest reachable point). Client states: `0` normal, `1` Alliance, `2` Horde, `3` dead.
-Unknown message types get an empty response. The protocol version (GET_CONFIG, `2` since 1.9) tells clients whether
-EXPLORE_POLY and flag `32` are available, older clients simply ignore the GET_CONFIG trailer.
+returning a path to the closest reachable point), `64` wall margin, `128` shortcut, `256` round corners, `512` follow
+(PATH and PATH_EX), `1024` random offsets (PATH_EX). Client states: `0` normal, `1` Alliance, `2` Horde, `3` dead.
+Unknown message types get an empty response. The protocol version (GET_CONFIG) tells clients what is available:
+`2` (1.9) EXPLORE_POLY and flag `32`, `3` (1.10) everything else. Older clients simply ignore the GET_CONFIG trailer,
+older servers ignore the new flags and the tuning trailer.
+
+**Path tuning trailer** (PATH, RANDOM_PATH, PATH_EX after the request, EXPLORE_POLY after the polygon):
+`float wallMargin, float cornerRadius, int cornerPoints, float stopDistance`. Negative values use the server defaults.
+`stopDistance` ends the path that far before the target, at a point that sees it over the navmesh.
+
+**Refinement** (`64`, `128`, `256`): shortcuts skip corners where a straight line stays on the navmesh, the wall margin
+moves corners out of the turn (away from the wall they bend around), round corners replace them by arcs around them
+(at least the wall margin away). Every changed segment is checked with a navmesh raycast that has to arrive on the end
+point's surface, a step that fails is skipped (half the distance is tried first): the result is never worse than the
+plain path. Off-mesh connections split the path, their ends never move.
+
+**Follow** (`512`): the server keeps the connection's corridor (`dtPathCorridor`) and walks it to the new start while
+the start stays within 3 yards of it and the target within 10 yards of the previous one: the corners ahead stay the
+same between requests and a request is cheap. Anything else searches again.
+
+**PATH_EX point flags**: `1` start, `2` end, `4` an off-mesh connection starts here (the next point is where it ends),
+then how to take it: `8` jump, `16` drop (walk off the ledge), `32` custom link.
+
+**Off-mesh connections.** Area ids `40` jump, `41` drop, `42` link, polygon flags `64` jump, `128` drop, the same for
+ANP and MMAP navmeshes. Jumps are excluded by the default filters (a bot has to jump there): enable them with a
+CONFIGURE_FILTER cost for area `40`. `sOffMeshFile` lines are `mapId tileX,tileY (x y z) (x y z) radius [area [flags]]`
+(WoW coordinates, bidirectional, the tile is ignored). Automatic drop links (`fAutoDropHeight`) only see the navmesh:
+a ledge can't be told apart from a wall with ground behind it (an upper floor next to the street), keep the reach
+small. Exports with geometry checks are better.
+
+**Avoid zones** cost more to cross (cost multiplier, they apply to surfaces within max(radius, 5) of the center
+height). The search prefers other ways, segments that still cross a zone are led around it. Zones are per connection
+and map (64 max). **Stuck reports** add a zone for every client on the map (repeated reports at a spot raise its cost),
+kept in `sAvoidZonesFile` if set.
+
+**CONFIGURE_FILTER costs**: `0` forbids an area, a cost above 0 also allows an area the server excludes by default
+(steep slopes on TrinityCore MMAPs, jumps). TrinityCore areas: `11` ground, `10` steep, `9` water, `8` magma/slime.
+SkyFire: `1` ground, `2` magma, `4` slime, `8` water.
+
+**STEER** returns the velocity for one tick towards the target (along the navmesh path, slowing down on arrival) that
+avoids up to 32 units, the avoid zones and the navmesh borders (Detour's obstacle avoidance), and where that velocity
+leads on the navmesh after `deltaTime`.
 
 **EXPLORE_POLY** places waypoints on a hexagonal grid (`spacing` apart, e.g. twice the sight or gather range) inside
 the polygon (x/y outline, max 256 points, its z selects the floor on stacked geometry), snaps them to the navmesh,
@@ -134,10 +215,22 @@ at `iMaxPointPath` points.
 using var nav = new AmeisenNavClient("127.0.0.1", 47110);
 nav.TryConnect();
 nav.SetClientState(ClientState.NormalAlliance);
+nav.SetCanSwim(false);                         // water forbidden (cost 0)
+nav.SetTerrainCost(TerrainType.Jump, 2f);      // this bot jumps where PathEx says
 nav.ApplyFilter();
 
 Vector3[]? path = nav.GetPath(0, start, end, PathFlags.SmoothCatmullRom | PathFlags.ValidateMoveAlongSurface);
 Vector3[]? complete = nav.GetPath(0, start, end, PathFlags.RequireComplete); // null if unreachable
+Vector3[]? fluid = nav.GetPath(0, start, end, PathFlags.Fluid, new PathTuning(StopDistance: 5f));
+Vector3[]? chase = nav.GetPath(0, position, target, PathFlags.Follow);     // stable corners while walking
+
+PathResult? detailed = nav.GetPathEx(0, start, end);
+// detailed.Flags[i].HasFlag(PathPointFlags.Jump): jump from Points[i] to Points[i + 1]
+
+nav.SetAvoidZones(0, [new AvoidZone(dangerousMob, 20f, cost: 10f)]);      // resent after a reconnect
+SteerResult step = nav.Steer(0, position, velocity, nextWaypoint, maxSpeed: 7f, units: nearbyPlayers);
+nav.ReportStuck(0, position);                  // every client avoids this spot from now on
+
 RaycastHit hit = nav.CastRayEx(0, position, target);
 Vector3[]? route = nav.ExplorePolygon(0, position, grindArea, spacing: 40f);
 ServerConfig? config = nav.GetConfig(); // ProtocolVersion, MaxPointPath, ServerVersion, ...

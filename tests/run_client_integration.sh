@@ -15,6 +15,7 @@ WORK="$(mktemp -d)"
 cat > "$WORK/config.cfg" <<CFG
 bUseAnpFileFormat=1
 iMaxPointPath=256
+fAutoDropHeight=8
 iPort=$PORT
 sIp=127.0.0.1
 sMmapsPath=$MESHES
