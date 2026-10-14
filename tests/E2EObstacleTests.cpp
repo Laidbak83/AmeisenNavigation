@@ -96,6 +96,18 @@ const Scene& Build(float agentClimb)
         AddBox(s, {OBSTACLE_X, 0.0f, lane.z0}, {OBSTACLE_X + 0.15f, h, lane.z1}, DOODAD);
     }
 
+    // The same fences on a floor that isn't aligned to the cell height (span tops round up to the next cell): a
+    // fence must not turn into a step depending on where the ground lies in a cell.
+    for (const float h : {1.1f, 1.3f})
+    {
+        for (const float floor : {0.37f, 0.61f})
+        {
+            const Lane lane = addLane(std::format("fence {:.1f} on {:.2f}", h, floor));
+            AddBox(s, {LANE_X0, 0.0f, lane.z0}, {LANE_X1, floor, lane.z1}, WMO);
+            AddBox(s, {OBSTACLE_X, floor, lane.z0}, {OBSTACLE_X + 0.15f, floor + h, lane.z1}, DOODAD);
+        }
+    }
+
     // Stairs: 0.45 yard risers, 0.9 yard treads, up to a platform at 4.5 yards.
     {
         const Lane lane = addLane("stairs");
@@ -174,11 +186,13 @@ const Scene& Build(float agentClimb)
 }
 
 /// Complete path along a lane from before to after the obstacle?
-bool Passable(AmeisenNavigation& nav, const Lane& lane, float endY = 0.0f, float endX = LANE_X1 - 5.0f)
+bool Passable(AmeisenNavigation& nav, const Lane& lane, float endY = 0.0f, float endX = LANE_X1 - 5.0f,
+              float startY = -1.0f)
 {
     Path path(512);
     bool partial = true;
-    return nav.GetPath(1, MAP_ID, Wow(LANE_X0 + 5.0f, 0.0f, lane.center()), Wow(endX, endY, lane.center()), path,
+    const float start = startY >= 0.0f ? startY : (endX == LANE_X1 - 5.0f ? endY : 0.0f);
+    return nav.GetPath(1, MAP_ID, Wow(LANE_X0 + 5.0f, start, lane.center()), Wow(endX, endY, lane.center()), path,
                        &partial)
            && !partial;
 }
@@ -206,6 +220,12 @@ TEST_CASE(Obstacles_FencesTallerThanAStepBlock)
     CHECK(!Passable(nav, scene.lanes.at("fence 1.3")));
     CHECK(!Passable(nav, scene.lanes.at("fence 1.6")));
     CHECK(!Passable(nav, scene.lanes.at("fence 2.2")));
+
+    for (const char* lane : {"fence 1.1 on 0.37", "fence 1.1 on 0.61", "fence 1.3 on 0.37", "fence 1.3 on 0.61"})
+    {
+        const float floor = scene.lanes.at(lane).name.ends_with("0.37") ? 0.37f : 0.61f;
+        CHECK(!Passable(nav, scene.lanes.at(lane), floor));
+    }
 }
 
 TEST_CASE(Obstacles_StairsLedgesGapsAndCeilings)

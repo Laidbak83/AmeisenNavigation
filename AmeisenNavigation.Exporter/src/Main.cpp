@@ -30,6 +30,9 @@ void PrintUsage()
         "  -s, --skip-existing     Don't rebuild maps whose .anp file already exists\n"
         "  -d, --debug             Debug logging and area debug images (<output>/debug)\n"
         "  -l, --list-maps         List the maps in Map.dbc and exit\n"
+        "  -g, --gameobjects <file> Add the collision of these game object spawns (see README)\n"
+        "      --gameobject-exclude <types|none> Game object types left out [0,11,15,33,35: doors,\n"
+        "                          transports, destructible buildings, trapdoors]\n"
         "  -h, --help              Show this help\n\n"
         "Agent (yards, degrees), defaults in brackets:\n"
         "      --climb <h>         Highest step walked up without jumping [1.0], obstacles above it block\n"
@@ -130,6 +133,30 @@ bool ParseArguments(int argc, char** argv, CommandLine& cmd, bool& exitEarly)
             {
                 LogE("Invalid --tile value: ", tile, " (expected x,y with 0 <= x,y < 64)");
                 return false;
+            }
+        }
+        else if ((arg == "--gameobjects" || arg == "-g") && hasValue)
+        {
+            options.gameObjects = argv[++i];
+        }
+        else if (arg == "--gameobject-exclude" && hasValue)
+        {
+            std::string_view list = argv[++i];
+            options.gameObjectExcludedTypes.clear();
+
+            while (!list.empty() && list != "none")
+            {
+                const auto comma = list.find(',');
+                int type = 0;
+
+                if (!ParseInt(list.substr(0, comma), type))
+                {
+                    LogE("Invalid --gameobject-exclude value: ", argv[i]);
+                    return false;
+                }
+
+                options.gameObjectExcludedTypes.push_back(type);
+                list = comma == std::string_view::npos ? std::string_view() : list.substr(comma + 1);
             }
         }
         else if ((arg == "--jump-height" || arg == "--drop-height") && hasValue)

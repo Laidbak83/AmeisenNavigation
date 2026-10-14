@@ -21,6 +21,10 @@ struct ExportOptions
     bool debug = false;              // area debug images
     bool skipExisting = false;       // don't rebuild maps whose .anp already exists
     TileBuildConfig buildConfig{};
+
+    /// Game object spawns whose collision is added (see GameObjects.hpp for the file format), empty = none.
+    std::filesystem::path gameObjects;
+    std::vector<int> gameObjectExcludedTypes{0, 11, 15, 33, 35}; // doors, transports, destructible, trapdoors
 };
 
 /// Outcome of one map.
@@ -41,6 +45,8 @@ struct MapExportStats
     size_t factionRects = 0;
     size_t wmoPlacements = 0;
     size_t doodadPlacements = 0;
+    size_t gameObjects = 0;         // spawns with collision added
+    size_t gameObjectsMissing = 0;  // spawns whose model wasn't found
     int tilesBuilt = 0;
     int tilesFailed = 0;
 };

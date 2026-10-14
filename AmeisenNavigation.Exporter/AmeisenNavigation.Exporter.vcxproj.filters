@@ -120,6 +120,7 @@
       <Filter>Headerdateien</Filter>
     </ClInclude>
     <ClInclude Include="src\Processors\OffMeshBuilder.hpp" />
+    <ClInclude Include="src\Wow\GameObjects.hpp" />
   </ItemGroup>
   <ItemGroup>
     <None Include="src\Utils\xxhash\LICENSE" />

@@ -14,6 +14,8 @@ struct ClientData
     std::vector<std::pair<unsigned int, std::string>> maps;
     std::unordered_map<unsigned int, LiquidType> liquidTypes;
     AreaData areas;
+    std::unordered_map<unsigned int, std::string> gameObjectModels; // GameObjectDisplayInfo.dbc
+    std::unordered_map<int, std::vector<GameObjectSpawn>> gameObjects; // per map
 };
 
 /// AreaTable.dbc (WotLK 3.3.5a): field 0 = ID, 2 = ParentAreaID, 4 = Flags, 28 = FactionGroupMask.
@@ -312,6 +314,59 @@ MapExportStats ExportMap(unsigned int mapId, const std::string& mapName, const E
         stats.doodadPlacements = map.doodadPlacements.Size();
     }
 
+    // Game objects spawned by the server, on the exported ADTs.
+    if (const auto spawns = client.gameObjects.find(static_cast<int>(mapId)); spawns != client.gameObjects.end())
+    {
+        std::unordered_set<int> exportedAdts;
+
+        for (const auto& adt : adts)
+        {
+            exportedAdts.insert(adt.x * 64 + adt.y);
+        }
+
+        Structure objects;
+
+        for (const GameObjectSpawn& spawn : spawns->second)
+        {
+            const int adtX = 31 - static_cast<int>(std::floor(spawn.position.y / TILESIZE));
+            const int adtY = 31 - static_cast<int>(std::floor(spawn.position.x / TILESIZE));
+
+            if (!stats.wmoOnly && !exportedAdts.contains(adtX * 64 + adtY))
+            {
+                continue;
+            }
+
+            if (std::find(options.gameObjectExcludedTypes.begin(), options.gameObjectExcludedTypes.end(), spawn.type)
+                != options.gameObjectExcludedTypes.end())
+            {
+                continue;
+            }
+
+            std::string model = spawn.model;
+
+            if (model.empty())
+            {
+                const auto it = client.gameObjectModels.find(spawn.displayId);
+                model = it != client.gameObjectModels.end() ? it->second : std::string();
+            }
+
+            if (!model.empty() && GameObjects::Add(spawn, model, reader, &objects, client.liquidTypes))
+            {
+                stats.gameObjects++;
+            }
+            else
+            {
+                stats.gameObjectsMissing++;
+                LogD("[", mapName, "] game object display ", spawn.displayId, " (", model, "): model not found");
+            }
+        }
+
+        objects.Clean();
+        map.geometry.Append(objects);
+        LogI(std::format("[{}] Game objects: {} added, {} without a model", mapName, stats.gameObjects,
+                         stats.gameObjectsMissing));
+    }
+
     stats.adts = static_cast<int>(adts.size());
     stats.vertices = map.geometry.verts.size();
     stats.triangles = map.geometry.tris.size();
@@ -474,6 +529,27 @@ ExportReport RunExport(const ExportOptions& options)
     if (!LoadClientData(reader, client, false))
     {
         return report;
+    }
+
+    if (!options.gameObjects.empty())
+    {
+        size_t invalid = 0;
+        const auto spawns = GameObjects::ReadSpawns(options.gameObjects, &invalid);
+
+        for (const GameObjectSpawn& spawn : spawns)
+        {
+            client.gameObjects[spawn.mapId].push_back(spawn);
+        }
+
+        client.gameObjectModels =
+            GameObjects::LoadDisplayModels(reader.GetFileContent<Dbc>("DBFilesClient\\GameObjectDisplayInfo.dbc"));
+        LogI(std::format("Game objects: {} spawns from \"{}\" ({} invalid lines), {} display models", spawns.size(),
+                         options.gameObjects.string(), invalid, client.gameObjectModels.size()));
+
+        if (spawns.empty())
+        {
+            LogW("No game object spawns read from \"", options.gameObjects.string(), "\"");
+        }
     }
 
     report.setupOk = true;

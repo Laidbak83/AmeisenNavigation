@@ -72,7 +72,7 @@ struct TileBuildConfig
     float walkableSlopeAngle = 55.0f;
     float agentHeight = 2.0f;
     float agentRadius = 0.6f;
-    float agentClimb = 1.0f; // highest step walked up without jumping (fences from ~1.05 yards on block)
+    float agentClimb = 1.0f; // highest step walked up without jumping (obstacles from climb + 1 cell height block)
     int minRegionSize = 10;          // in cells (squared for the area)
     int mergeRegionSize = 25;        // in cells (squared for the area)
     float maxEdgeLength = 12.0f;     // world units
@@ -239,12 +239,16 @@ public:
     }
 
 private:
-    Params MakeParams(int retry) const noexcept
+    /// heightRange: the tile's vertical extent, the cell height is halved when the 13 bit span heights allow it.
+    Params MakeParams(int retry, float heightRange = 0.0f) const noexcept
     {
         Params p{};
         p.cs = TILESIZE / static_cast<float>(Config.meshResolution);
-        p.ch = p.cs;
-        p.walkableClimb = static_cast<int>(std::ceil(Config.agentClimb / p.ch));
+        p.ch = heightRange > 0.0f && heightRange / (p.cs * 0.5f) < RC_SPAN_MAX_HEIGHT - 64 ? p.cs * 0.5f : p.cs;
+
+        // Span tops are rounded up to the next cell, a step between two spans is off by up to one cell: rounding the
+        // climb down guarantees that obstacles from agentClimb + ch on block (a fence is never a step).
+        p.walkableClimb = std::max(1, static_cast<int>(std::floor(Config.agentClimb / p.ch)));
         p.walkableHeight = static_cast<int>(std::floor(Config.agentHeight / p.ch));
         p.walkableRadius = static_cast<int>(std::ceil(Config.agentRadius / p.cs));
         p.borderSize = p.walkableRadius + 3;
@@ -259,7 +263,7 @@ private:
         p.maxEdgeLen = static_cast<int>(Config.maxEdgeLength * coarsen / p.cs);
         p.maxSimplificationError = Config.maxSimplificationError * coarsen;
         p.detailSampleDist = p.cs * Config.detailSampleDistance * coarsen;
-        p.detailSampleMaxError = p.ch * Config.detailSampleMaxError * coarsen;
+        p.detailSampleMaxError = p.cs * Config.detailSampleMaxError * coarsen; // absolute, independent of ch
         return p;
     }
 
@@ -444,7 +448,7 @@ private:
             TileBounds(tile, tbbMin, tbbMax);
 
             // Vertical bounds from this tile's triangles only: spans store heights with 13 bits
-            // (8191 * ch ~ 1700 yards), a map wide range would clamp high terrain.
+            // (8191 * ch ~ 850 or 1700 yards), a map wide range would clamp high terrain.
             tbbMin[1] = std::numeric_limits<float>::max();
             tbbMax[1] = std::numeric_limits<float>::lowest();
 
@@ -459,7 +463,8 @@ private:
             tbbMin[1] -= 1.0f;
             tbbMax[1] += 1.0f;
 
-            const Params base = MakeParams(0);
+            const float heightRange = tbbMax[1] - tbbMin[1];
+            const Params base = MakeParams(0, heightRange);
 
             if ((tbbMax[1] - tbbMin[1]) / base.ch > RC_SPAN_MAX_HEIGHT)
             {
@@ -473,7 +478,7 @@ private:
 
             for (int retry = 0; retry <= Config.maxRetries; ++retry)
             {
-                const Params p = MakeParams(retry);
+                const Params p = MakeParams(retry, heightRange);
                 const BuildResult result = BuildTileAttempt(
                     s, tile, tbbMin, tbbMax, subBuckets, p, waterMap, roadMap, factionMap, cityMap, parallelSubTiles,
                     Config.debugBmp && retry == 0, tileBuckets.Begin(tileIndex), tileBuckets.End(tileIndex));

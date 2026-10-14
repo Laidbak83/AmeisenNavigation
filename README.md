@@ -119,6 +119,9 @@ extracts terrain, liquids, WMOs and doodads, and builds one Detour tile per ADT:
   meshes are read for every model version (vanilla/TBC headers, WotLK, chunked MD21). The default climb (1.0 yard)
   makes fences from about 1.05 yards on block the way: a path never leads over an obstacle the bot can't step over
   (see `tests/E2EObstacleTests.cpp` for fences, stairs, ledges, narrow passages and low ceilings).
+- Heights are quantized finely enough for obstacles: the cell height is half the cell size where the tile's height
+  range allows it, and the climb is rounded down to cells, so an obstacle from `--climb` + one cell height on always
+  blocks wherever the ground lies in a cell (Recast rounds span tops up, a fence used to pass as a step).
 - Jump and drop links (off-mesh connections) where the navmesh ends at an obstacle or a ledge, checked against the
   geometry: a jump goes over an obstacle no higher than `--jump-height` above the takeoff (or a gap, or up onto
   something up to 1.25 yards higher) with nothing else in the way up to head height, a drop goes down a ledge with
@@ -127,6 +130,32 @@ extracts terrain, liquids, WMOs and doodads, and builds one Detour tile per ADT:
   enable them.
 - Area ids (see `AmeisenNavigation.Pack/src/AnpFormat.hpp`) come in {neutral, Alliance, Horde} triplets for ground,
   road, city, WMO, doodad, water, ocean, lava and slime.
+
+### Game objects
+
+Fences, gates, stalls, braziers and the like are often game objects spawned by the server, not part of the ADTs:
+without them the navmesh leads straight through them. `--gameobjects <file>` adds their collision (M2 or WMO model,
+scale, rotation) to the maps being exported. The file is delimited text (comma, semicolon or tab), with a header
+line naming the columns or in this order without one:
+
+```
+map, displayId, x, y, z, orientation, rotation0, rotation1, rotation2, rotation3, scale, type
+```
+
+`displayId` is resolved through `GameObjectDisplayInfo.dbc`, a `model` column (a model path) can be given instead.
+The quaternion (`rotation0..3`) wins over `orientation` when it isn't zero. Types `0` (doors, assumed open: a bot opens
+them), `11`/`15` (transports), `33` (destructible buildings) and `35` (trapdoors) are left out by default
+(`--gameobject-exclude <types|none>`). From a TrinityCore/AzerothCore world database:
+
+```bash
+mysql -B world -e "SELECT g.map, t.displayId, g.position_x, g.position_y, g.position_z, g.orientation,
+  g.rotation0, g.rotation1, g.rotation2, g.rotation3, t.size, t.type
+  FROM gameobject g JOIN gameobject_template t ON t.entry = g.id" > gameobjects.tsv
+```
+
+A bot can also write the objects it sees in the game in the same format. Spawns are only added on the ADTs being
+exported. The model axes follow the client (x forward, z up, turned by the orientation around z): check a few spawns
+in game after an export (`anav_navmesh2ply`, below, shows the navmesh around them).
 
 ## Recent clients (CASC)
 

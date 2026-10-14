@@ -398,26 +398,20 @@ constexpr bool IsWmoCollisionFace(unsigned char flags) noexcept
     return (flags & WMO_FACE_COLLISION) != 0 || ((flags & WMO_FACE_RENDER) != 0 && (flags & WMO_FACE_DETAIL) == 0);
 }
 
-/// Extract one WMO placement (solid + liquid + doodads of the placement's doodad set).
-inline void ExtractWmoPlacement(const MODF::Entry& entry, const char* wmoRootFilename, CachedFileReader& reader,
-                                Structure* structure, const std::unordered_map<unsigned int, LiquidType>& liquidTypes)
+/// Extract a WMO (solid + liquid + doodads of doodad set 0 and doodadSet) with a transform from the WMO's local
+/// space to WoW coordinates. Returns false if the WMO doesn't exist.
+inline bool ExtractWmo(const char* wmoRootFilename, const Matrix4x4& transform, unsigned short doodadSet,
+                       CachedFileReader& reader, Structure* structure,
+                       const std::unordered_map<unsigned int, LiquidType>& liquidTypes, TriAreaId area = WMO)
 {
     const Wmo* wmo = reader.GetFileContent<Wmo>(wmoRootFilename);
 
     if (!wmo)
     {
-        return;
+        return false;
     }
 
     const MOHD* mohd = wmo->Mohd();
-
-    Matrix4x4 transform;
-    transform.SetRotation({entry.rz, entry.rx, entry.ry + 180.0f});
-
-    if (entry.x != 0.0f || entry.y != 0.0f || entry.z != 0.0f)
-    {
-        transform.SetTranslation({-(entry.z - WORLDSIZE), -(entry.x - WORLDSIZE), entry.y});
-    }
 
     const std::string_view rootName(wmoRootFilename);
     const auto rootStem = rootName.substr(0, rootName.find_last_of('.'));
@@ -462,7 +456,7 @@ inline void ExtractWmoPlacement(const MODF::Entry& entry, const char* wmoRootFil
                     c = movi->tris[t * 3 + 2];
                     return true;
                 },
-                WMO);
+                area);
         }
 
         // WMO liquid
@@ -528,7 +522,7 @@ inline void ExtractWmoPlacement(const MODF::Entry& entry, const char* wmoRootFil
 
     if (!modd || !modn || modd->size == 0)
     {
-        return;
+        return true;
     }
 
     const unsigned int definitionCount = modd->size / sizeof(MODD::Definition);
@@ -549,9 +543,9 @@ inline void ExtractWmoPlacement(const MODF::Entry& entry, const char* wmoRootFil
 
         addSet(0);
 
-        if (entry.doodadSet != 0)
+        if (doodadSet != 0)
         {
-            addSet(entry.doodadSet);
+            addSet(doodadSet);
         }
     }
     else
@@ -586,10 +580,27 @@ inline void ExtractWmoPlacement(const MODF::Entry& entry, const char* wmoRootFil
                 doodadTransform.SetTranslation(definition.position);
                 doodadTransform.Multiply(transform);
 
-                AddM2Collision(m2, doodadTransform, structure, WMO);
+                AddM2Collision(m2, doodadTransform, structure, area);
             }
         }
     }
+
+    return true;
+}
+
+/// Extract one ADT/WDT WMO placement.
+inline void ExtractWmoPlacement(const MODF::Entry& entry, const char* wmoRootFilename, CachedFileReader& reader,
+                                Structure* structure, const std::unordered_map<unsigned int, LiquidType>& liquidTypes)
+{
+    Matrix4x4 transform;
+    transform.SetRotation({entry.rz, entry.rx, entry.ry + 180.0f});
+
+    if (entry.x != 0.0f || entry.y != 0.0f || entry.z != 0.0f)
+    {
+        transform.SetTranslation({-(entry.z - WORLDSIZE), -(entry.x - WORLDSIZE), entry.y});
+    }
+
+    ExtractWmo(wmoRootFilename, transform, entry.doodadSet, reader, structure, liquidTypes);
 }
 
 /// Extract the global WMO of a WMO-only map (dungeons, raids). Returns false if the map has none.

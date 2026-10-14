@@ -7,6 +7,14 @@
 - **Climb 1.0 yard** (was 1.2): obstacles from about 1.05 yards on block the way. With 1.2 the navmesh led over
   1.1 yard fences and bots ran into them (`tests/E2EObstacleTests.cpp` reproduces it). Stairs (0.45 yard risers),
   narrow passages and low ceilings behave as before. `--climb`, `--radius`, `--height`, `--slope` tune the agent.
+- **Fences never pass as steps**: Recast rounds span tops up to the next cell, so a step between two spans is off by up
+  to one cell. The climb is now rounded down to cells and the cell height is half the cell size where the tile's
+  height range allows it (13 bit spans): obstacles from climb + one cell height (~1.1 yards) always block. A 1.1 yard
+  fence on ground at an unlucky height passed before (test included).
+- **Game objects** (`--gameobjects <file>`): the collision of server spawned objects (fences, gates, stalls...) from a
+  spawn file (TrinityCore/AzerothCore world database export, or what a bot logged), models from
+  GameObjectDisplayInfo.dbc or a model path, scale and quaternion/orientation. Doors, transports, destructible
+  buildings and trapdoors are left out by default (`--gameobject-exclude`).
 - **WMO collision faces like the client** (TrinityCore's vmap extractor rule): a triangle collides if it is flagged
   as collision, or rendered and not a detail. Before, faces with neither flag (portals, hints) were phantom walls
   and solid detail faces (railings) were dropped.

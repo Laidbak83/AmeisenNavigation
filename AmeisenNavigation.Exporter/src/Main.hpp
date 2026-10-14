@@ -33,6 +33,7 @@
 #include "Utils/Vector3.hpp"
 #include "Wow/Adt.hpp"
 #include "Wow/AdtChunkExtractor.hpp"
+#include "Wow/GameObjects.hpp"
 #include "Wow/LiquidType.hpp"
 #include "Wow/RoadDetector.hpp"
 #include "Wow/Wdt.hpp"

@@ -3,6 +3,8 @@
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <format>
+#include <fstream>
 #include <map>
 #include <mutex>
 
@@ -11,6 +13,7 @@
 #include "TestWorld.hpp"
 #include "WowDataBuilder.hpp"
 #include "Wow/AdtChunkExtractor.hpp"
+#include "Wow/GameObjects.hpp"
 
 // Full exporter run on synthetic client data: MPQs (incl. a locale archive and a patch overriding an ADT)
 // -> DBCs, WDT, ADT terrain/liquid/textures/areas, WMOs, M2s -> .anp -> navigation queries.
@@ -67,6 +70,12 @@ const Vector3 PLAIN = ChunkCenter(32, 32, 1, 14);
 const Vector3 WATER = ChunkCenter(33, 32, 5, 5); // pool over chunks 4..6 x 4..6
 const Vector3 WMO_POS{-250.0f, -TILESIZE, TerrainHeight(-250.0f, -TILESIZE)}; // on the ADT border
 const Vector3 DOODAD_POS{-450.0f, -300.0f, TerrainHeight(-450.0f, -300.0f)};
+
+// Game objects: a fence by display id (GameObjectDisplayInfo.dbc names it .mdx like the real client).
+constexpr uint32_t FENCE_DISPLAY_ID = 500;
+const char* const FENCE_MODEL = "World\\Generic\\Test\\Fence.mdx";
+constexpr float FENCE_HALF_LENGTH = 15.0f;
+constexpr float FENCE_HEIGHT = 1.4f;
 
 const char* const WMO_NAME = "World\\wmo\\Test\\Platform.wmo";
 const char* const DUNGEON_WMO_NAME = "World\\wmo\\Dungeon\\TestDungeon\\TestDungeon.wmo";
@@ -198,9 +207,14 @@ bool WriteClientData(const std::filesystem::path& wowDir)
                                   area(AREA_CONTESTED, 0, 0, 0)},
                                  StringTable{});
 
+    // GameObjectDisplayInfo.dbc: field 0 = id, 1 = model name (19 fields in WotLK).
+    StringTable displayNames;
+    const auto displayDbc = MakeDbc(19, {{FENCE_DISPLAY_ID, displayNames.Add(FENCE_MODEL)}}, displayNames);
+
     if (!WriteMpq(dataDir / "enUS" / "locale-enUS.MPQ", {{"DBFilesClient\\Map.dbc", mapDbc},
                                                          {"DBFilesClient\\LiquidType.dbc", liquidDbc},
-                                                         {"DBFilesClient\\AreaTable.dbc", areaDbc}}))
+                                                         {"DBFilesClient\\AreaTable.dbc", areaDbc},
+                                                         {"DBFilesClient\\GameObjectDisplayInfo.dbc", displayDbc}}))
     {
         return false;
     }
@@ -222,6 +236,14 @@ bool WriteClientData(const std::filesystem::path& wowDir)
         AddBox(verts, indices, {-DOODAD_HALF_SIZE, -DOODAD_HALF_SIZE, -1.0f},
                {DOODAD_HALF_SIZE, DOODAD_HALF_SIZE, DOODAD_TOP});
         common.emplace_back("World\\Generic\\Test\\Crate.m2", MakeM2(verts, indices));
+    }
+
+    {
+        // Game object fence: 30 yards along the model's x axis, 1.4 high (vanilla header, like old clients).
+        std::vector<Vector3> verts;
+        std::vector<uint16_t> indices;
+        AddBox(verts, indices, {-FENCE_HALF_LENGTH, -0.1f, -0.3f}, {FENCE_HALF_LENGTH, 0.1f, FENCE_HEIGHT});
+        common.emplace_back("World\\Generic\\Test\\Fence.m2", MakeM2(verts, indices, 256));
     }
 
     // Dungeon: global WMO at the origin, a floor (group 0) and a pillar (group 1).
@@ -646,3 +668,129 @@ TEST_CASE(M2_CollisionOfEveryVersion)
     CHECK(!notMd20.IsValid());
     CHECK(!tooShort.IsValid());
 }
+
+TEST_CASE(Exporter_GameObjectsBlockTheWay)
+{
+    REQUIRE(Get().dataOk);
+    const auto root = std::filesystem::temp_directory_path() / "anav_tests" / "exporter_gameobjects";
+    std::filesystem::remove_all(root);
+    std::filesystem::create_directories(root);
+
+    // Fence along WoW x by display id, a door (type 0, left out by default), the fence by model path turned by 90
+    // degrees (along WoW y), a line with a bad number.
+    const Vector3 fence{PLAIN.x, PLAIN.y, TerrainHeight(PLAIN.x, PLAIN.y)};
+    const Vector3 door{PLAIN.x, PLAIN.y - 40.0f, TerrainHeight(PLAIN.x, PLAIN.y - 40.0f)};
+    const Vector3 turned{PLAIN.x + 45.0f, PLAIN.y - 80.0f, TerrainHeight(PLAIN.x + 45.0f, PLAIN.y - 80.0f)};
+    const auto csv = root / "gameobjects.csv";
+
+    {
+        std::ofstream out(csv);
+        out << "map,displayId,model,x,y,z,orientation,rotation0,rotation1,rotation2,rotation3,scale,type\n";
+        out << std::format("{},{},,{},{},{},0,0,0,0,0,1,5\n", CONTINENT, FENCE_DISPLAY_ID, fence.x, fence.y, fence.z);
+        out << std::format("{},{},,{},{},{},0,0,0,0,0,1,0\n", CONTINENT, FENCE_DISPLAY_ID, door.x, door.y, door.z);
+        out << std::format("{},,World\\Generic\\Test\\Fence.m2,{},{},{},1.5707964,0,0,0,0,1,5\n", CONTINENT,
+                           turned.x, turned.y, turned.z);
+        out << std::format("{},{},,abc,0,0,0,0,0,0,0,1,5\n", CONTINENT, FENCE_DISPLAY_ID);
+    }
+
+    ExportOptions options = BaseOptions(Get());
+    options.outputDir = root / "meshes";
+    options.mapIds = {static_cast<int>(CONTINENT)};
+    options.gameObjects = csv;
+    const ExportReport report = RunExport(options);
+    REQUIRE(report.maps.size() == 1);
+    CHECK(report.maps[0].exported);
+    CHECK_EQ(report.maps[0].gameObjects, size_t{2});
+    CHECK_EQ(report.maps[0].gameObjectsMissing, size_t{0});
+
+    AmeisenNavigationSettings settings;
+    settings.meshFolder = options.outputDir;
+    settings.useAnp = true;
+    settings.maxPointPath = 256;
+    AmeisenNavigation nav(settings);
+    REQUIRE(nav.NewClient(1));
+
+    const auto ground = [](float x, float y) { return Vector3{x, y, TerrainHeight(x, y)}; };
+    const auto crossing = [&](const Vector3& a, const Vector3& b, float& length) {
+        Path path(256);
+        REQUIRE(nav.GetPath(1, static_cast<int>(CONTINENT), a, b, path));
+        length = PathLength(path);
+        return nav.CastMovementRay(1, static_cast<int>(CONTINENT), a, b);
+    };
+
+    float length = 0.0f;
+
+    // Across the fence (WoW y): blocked, the path goes around one of its ends (15 yards away).
+    const Vector3 a = ground(fence.x, fence.y + 8.0f);
+    const Vector3 b = ground(fence.x, fence.y - 8.0f);
+    CHECK(!crossing(a, b, length));
+    CHECK(length > a.DistanceTo(b) + 15.0f);
+
+    // The door isn't there: straight through.
+    const Vector3 c = ground(door.x, door.y + 8.0f);
+    const Vector3 d = ground(door.x, door.y - 8.0f);
+    CHECK(crossing(c, d, length));
+    CHECK(length < c.DistanceTo(d) + 1.0f);
+
+    // The turned fence lies along WoW y: crossing it along x is blocked, along y next to it is free.
+    const Vector3 e = ground(turned.x + 8.0f, turned.y);
+    const Vector3 f = ground(turned.x - 8.0f, turned.y);
+    CHECK(!crossing(e, f, length));
+    CHECK(length > e.DistanceTo(f) + 15.0f);
+    CHECK(crossing(ground(turned.x + 3.0f, turned.y + 10.0f), ground(turned.x + 3.0f, turned.y - 10.0f), length));
+}
+
+TEST_CASE(GameObjects_SpawnFileFormats)
+{
+    const auto dir = std::filesystem::temp_directory_path() / "anav_tests" / "gameobject_files";
+    std::filesystem::create_directories(dir);
+
+    // Positional columns (no header), tab separated with a header (mysql -B output), comments, bad lines.
+    {
+        std::ofstream out(dir / "positional.csv");
+        out << "# comment\n0,123,1.5,2.5,3.5\n1,7,10,20,30,3.14,0,0,0.7071,0.7071,2,5\n0,1,nan,0,0\n";
+    }
+    {
+        std::ofstream out(dir / "tabs.tsv");
+        out << "map\tdisplayId\tposition_x\tposition_y\tposition_z\torientation\tsize\ttype\n";
+        out << "530\t42\t-100\t200\t30\t1\t1.5\t0\n";
+        out << "530\t\t-100\t200\t30\t1\t1.5\t0\n"; // no display id and no model
+    }
+
+    size_t invalid = 0;
+    const auto positional = GameObjects::ReadSpawns(dir / "positional.csv", &invalid);
+    REQUIRE(positional.size() == 2);
+    CHECK_EQ(invalid, size_t{1});
+    CHECK_EQ(positional[0].displayId, 123u);
+    CHECK_NEAR(positional[0].position.z, 3.5f, 1e-6);
+    CHECK_NEAR(positional[0].scale, 1.0f, 1e-6);
+    CHECK_EQ(positional[1].type, 5);
+    CHECK_NEAR(positional[1].rotation[3], 0.7071f, 1e-6);
+
+    const auto tabs = GameObjects::ReadSpawns(dir / "tabs.tsv", &invalid);
+    REQUIRE(tabs.size() == 1);
+    CHECK_EQ(invalid, size_t{1});
+    CHECK_EQ(tabs[0].mapId, 530);
+    CHECK_EQ(tabs[0].displayId, 42u);
+    CHECK_NEAR(tabs[0].scale, 1.5f, 1e-6);
+    CHECK_EQ(tabs[0].type, 0);
+
+    // Orientation and quaternion give the same transform.
+    GameObjectSpawn byYaw;
+    byYaw.orientation = 1.0f;
+    GameObjectSpawn byQuat;
+    byQuat.rotation[2] = std::sin(0.5f);
+    byQuat.rotation[3] = std::cos(0.5f);
+    const Vector3 local{3.0f, 1.0f, 2.0f};
+    const Vector3 p = GameObjects::SpawnTransform(byYaw).Transform(local);
+    const Vector3 q = GameObjects::SpawnTransform(byQuat).Transform(local);
+    CHECK(p.DistanceTo(q) < 1e-4f);
+
+    // Turning by 90 degrees maps the model's x axis onto WoW y.
+    GameObjectSpawn quarter;
+    quarter.orientation = 1.5707964f;
+    const Vector3 turned = GameObjects::SpawnTransform(quarter).Transform({1.0f, 0.0f, 0.0f});
+    CHECK_NEAR(turned.x, 0.0f, 1e-5);
+    CHECK_NEAR(turned.y, 1.0f, 1e-5);
+}
+
