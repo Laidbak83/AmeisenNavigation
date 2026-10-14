@@ -75,7 +75,12 @@ sources run a post-load hook: `sOffMeshFile`, automatic drops). Off-mesh area id
 triangles the navmesh was built from, per ADT, quantized, with a nav area and a source (`SourceKind << 28 | id`, from
 `Structure::triSources`; tag new geometry with `TagSources` right after adding it) and per chunk AreaTable ids. The
 server reads tiles on demand (`World/StaticWorld.cpp`: LRU per map, BVH per tile) for LINE_OF_SIGHT, SURFACES and
-SWEEP; positions go through `AnpWorld::AdtOf`/`IsFinite` checks, segments are capped at 1000 yards.
+SWEEP; positions go through `AnpWorld::AdtOf`/`IsFinite` checks, segments are capped at 1000 yards. Game objects at
+runtime (`AmeisenNavigation.Server/src/World/DynamicWorld.cpp`, SET_OBJECTS): models from `gameobjects.ano`, meshes
+published to `StaticWorld::SetDynamicMeshes`, dirty ADTs rebuilt on a worker thread with the exporter's
+`AdtTileProcessor` (the server lib links `anav_exporter_core`; it must not include StormLib headers such as
+`Wow/GameObjects.hpp`, use `Wow/GameObjectSpawn.hpp`) from the `.anw` tiles + "build" + "r_XX_YY" entries, then
+`AmeisenNavigation::ReplaceTiles` under the map's `NavMeshLock` (requests hold it shared through `QueryContext`).
 
 **Nav sources.** `AnpNavSource` (own format: zip with `mapId`, `params` and one Detour tile per `XX_YY` entry) and
 `MmapNavSource` (TrinityCore/SkyFire `.mmap`/`.mmtile`, format detected from file names, TrinityCore master's MMAP v16

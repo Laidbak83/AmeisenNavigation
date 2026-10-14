@@ -176,5 +176,27 @@ var pool = Wow(-90, 0, -430);
 Check(nav.GetSurfaces(map, pool.X, pool.Y, 10, -10) is { Surfaces: [{ Liquid: true }, { Standable: true }] },
       "GetSurfaces pool");
 
+// Game objects: a gate (display 777) closes the passage north of the wall.
+var gate = new WorldObject(42, 777, Wow(-300, 0, -50), Quaternion.None);
+var set = nav.SetObjects(map, [gate, gate with { Guid = 43, DisplayId = 1 }]);
+Check(set.Accepted == 1, $"SetObjects {set}");
+var blocked = nav.LineOfSight(map, Wow(-310, 1.5f, -50), Wow(-290, 1.5f, -50));
+Check(blocked.Hit && blocked.Source.Kind == WorldSourceKind.GameObject && blocked.Source.Id == 777,
+      $"LineOfSight hits the gate {blocked}");
+
+for (int i = 0; i < 100 && set.PendingTiles > 0; i++)
+{
+    System.Threading.Thread.Sleep(100);
+    set = nav.SetObjects(map, [gate]);
+}
+
+var southPath = nav.GetPath(map, start, end);
+Check(set.PendingTiles == 0 && southPath != null && southPath.Any(p => p.X < -520), "path around the south end with the gate");
+set = nav.SetObjects(map, [], [42ul]);
+Check(set.Accepted == 0, "SetObjects remove");
+Check(nav.SetObjects(4242, [gate]).Accepted == -1, "SetObjects without a static world");
+var body = nav.GetPathEx(map, start, end, PathFlags.ClearBody);
+Check(body is { Points.Length: >= 2 } && body.Flags.All(f => (f & PathPointFlags.Blocked) == 0), "GetPathEx ClearBody");
+
 Console.WriteLine(failures == 0 ? "ALL OK" : $"{failures} FAILED");
 return failures == 0 ? 0 : 1;

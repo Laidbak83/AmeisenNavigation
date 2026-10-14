@@ -29,6 +29,8 @@
 ///   LINE_OF_SIGHT           -> WorldHitResponse, request: LineOfSightData
 ///   SURFACES                -> SurfacesResponseHeader + count SurfaceData, request: SurfacesRequestData
 ///   SWEEP                   -> WorldHitResponse, request: SweepData
+///   SET_OBJECTS             -> SetObjectsResponse, request: SetObjectsHeader + count ObjectData
+///                              + removeCount uint64 guids
 ///   unknown types           -> empty payload
 
 enum class MessageType : unsigned char
@@ -51,6 +53,7 @@ enum class MessageType : unsigned char
     LINE_OF_SIGHT,       // Line of sight against the collision geometry (static world)
     SURFACES,            // Every surface under a point with its provenance (static world)
     SWEEP,               // Move a standing body along a segment: what it runs into (static world)
+    SET_OBJECTS,         // Add, move, open/close or remove game objects: their collision changes the navmesh
 };
 
 enum class PathType
@@ -73,6 +76,7 @@ enum class PathRequestFlags : int
     ROUND_CORNERS = 1 << 8,      // Replace corners by arcs (fCornerRadius, iCornerPoints) around them
     FOLLOW = 1 << 9,             // PATH only: reuse the corridor of the connection's previous path
     RANDOMIZE = 1 << 10,         // PATH_EX only: random offsets like RANDOM_PATH
+    CLEAR_BODY = 1 << 11,        // sweep a body along the path (static world), go around what blocks it
 };
 
 /// Bumped whenever requests/responses are added or extended (reported by GET_CONFIG).
@@ -80,7 +84,8 @@ enum class PathRequestFlags : int
 ///   2: EXPLORE_POLY, PathRequestFlags::REQUIRE_COMPLETE, GET_CONFIG trailer
 ///   3: AVOID_WALLS, SHORTCUT, ROUND_CORNERS, FOLLOW, PathTuningData trailer, SET_AVOID_ZONES, STEER,
 ///      REPORT_STUCK, PATH_EX, CONFIGURE_FILTER cost 0 (forbid) / > 0 (allow areas excluded by default)
-///   4: LINE_OF_SIGHT, SURFACES, SWEEP (static world)
+///   4: LINE_OF_SIGHT, SURFACES, SWEEP (static world), SET_OBJECTS (game objects at runtime), CLEAR_BODY and the
+///      PATH_EX point flags BYPASS / BLOCKED
 constexpr int PROTOCOL_VERSION = 4;
 
 constexpr bool HasFlag(int flags, PathRequestFlags flag) noexcept { return (flags & static_cast<int>(flag)) != 0; }
@@ -286,6 +291,39 @@ struct SurfaceData
     unsigned short reserved;
 };
 
+/// Variable length: header, count ObjectData, removeCount uint64 guids of objects to remove.
+struct SetObjectsHeader
+{
+    int mapId;
+    int count;
+    int removeCount;
+    int reserved;
+};
+
+enum ObjectFlags : unsigned int
+{
+    OBJECT_BLOCKING = 1 << 0, // its collision is in the way (closed door); without it the object is kept but open
+};
+
+struct ObjectData
+{
+    unsigned long long guid;
+    unsigned int displayId; // GameObjectDisplayInfo id (models exported to gameobjects.ano)
+    unsigned int flags;     // ObjectFlags
+    Vector3 position;       // WoW coordinates
+    float rotation[4];      // quaternion x, y, z, w (all 0 = none)
+    float scale;
+};
+
+struct SetObjectsResponse
+{
+    int accepted;     // objects with a known model, -1 = the map can't change (no static world with build settings)
+    int pendingTiles; // navmesh tiles waiting to be rebuilt (paths see the objects once they are)
+};
+
+/// Most objects (added + removed) in one SET_OBJECTS request.
+constexpr int MAX_OBJECTS_PER_REQUEST = 512;
+
 /// Most surfaces in one SURFACES response.
 constexpr int MAX_SURFACES = 64;
 
@@ -319,6 +357,8 @@ static_assert(sizeof(SteerRequestHeader) == 56 && offsetof(SteerRequestHeader, u
 static_assert(sizeof(SteerUnitData) == 28 && sizeof(SteerResponse) == 28);
 static_assert(sizeof(ReportStuckData) == 20);
 static_assert(sizeof(PathExResponseHeader) == 8);
+static_assert(sizeof(SetObjectsHeader) == 16 && sizeof(ObjectData) == 48 && offsetof(ObjectData, position) == 16);
+static_assert(sizeof(SetObjectsResponse) == 8);
 static_assert(sizeof(LineOfSightData) == 32 && sizeof(SweepData) == 44);
 static_assert(sizeof(WorldHitResponse) == 40 && offsetof(WorldHitResponse, source) == 32);
 static_assert(sizeof(SurfacesRequestData) == 24 && sizeof(SurfacesResponseHeader) == 8);

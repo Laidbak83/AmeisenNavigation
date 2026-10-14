@@ -82,9 +82,60 @@ inline bool ParseTileEntryName(const char* name, int& x, int& y) noexcept
     return true;
 }
 
+/// Where built tiles go: an .anp archive (AnpWriter) or memory (MemoryTileSink, runtime rebuilds).
+class TileSink
+{
+public:
+    virtual ~TileSink() = default;
+    virtual int GetMapId() const noexcept = 0;
+    virtual const dtNavMeshParams& GetParams() const noexcept = 0;
+    /// Thread-safe. Does not take ownership of navData.
+    virtual bool AddTile(const unsigned char* navData, int navDataSize) noexcept = 0;
+};
+
+/// Keeps built tiles in memory (validated copies). Thread-safe.
+class MemoryTileSink : public TileSink
+{
+    int MapId;
+    dtNavMeshParams Params;
+    std::mutex Mutex;
+    std::vector<std::vector<unsigned char>> Tiles;
+
+public:
+    MemoryTileSink(int mapId, const dtNavMeshParams& params) noexcept : MapId(mapId), Params(params) {}
+
+    int GetMapId() const noexcept override { return MapId; }
+    const dtNavMeshParams& GetParams() const noexcept override { return Params; }
+
+    bool AddTile(const unsigned char* navData, int navDataSize) noexcept override
+    {
+        if (!navData || navDataSize <= 0 || !ValidateTileData(navData, static_cast<size_t>(navDataSize)))
+        {
+            return false;
+        }
+
+        try
+        {
+            const std::lock_guard lock(Mutex);
+            Tiles.emplace_back(navData, navData + navDataSize);
+            return true;
+        }
+        catch (...)
+        {
+            return false;
+        }
+    }
+
+    std::vector<std::vector<unsigned char>> TakeTiles()
+    {
+        const std::lock_guard lock(Mutex);
+        return std::move(Tiles);
+    }
+};
+
 /// Thread-safe .anp writer used by the exporter. Tiles are deflated outside the archive lock so many
 /// tile builder threads can add tiles concurrently, only the (cheap) archive append is serialized.
-class AnpWriter
+class AnpWriter : public TileSink
 {
     int MapId;
     dtNavMeshParams Params;
@@ -123,14 +174,14 @@ public:
     AnpWriter(const AnpWriter&) = delete;
     AnpWriter& operator=(const AnpWriter&) = delete;
 
-    int GetMapId() const noexcept { return MapId; }
-    const dtNavMeshParams& GetParams() const noexcept { return Params; }
+    int GetMapId() const noexcept override { return MapId; }
+    const dtNavMeshParams& GetParams() const noexcept override { return Params; }
     int GetTileCount() const noexcept { return TileCount.load(); }
     size_t GetStoredBytes() const noexcept { return StoredBytes.load(); }
 
     /// Add a serialized Detour tile, stored under the cell in its header. Does not take ownership of navData.
     /// Thread-safe.
-    bool AddTile(const unsigned char* navData, int navDataSize) noexcept
+    bool AddTile(const unsigned char* navData, int navDataSize) noexcept override
     {
         if (!Valid || !navData || navDataSize <= 0)
         {

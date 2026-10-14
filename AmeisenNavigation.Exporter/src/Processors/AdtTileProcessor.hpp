@@ -151,14 +151,14 @@ private:
         std::vector<unsigned char> waterAreas;
     };
 
-    Anp::AnpWriter* Writer;
+    Anp::TileSink* Writer;
     std::filesystem::path OutputDir;
     std::string MapName;
     TileBuildConfig Config;
     Stats Statistics;
 
 public:
-    AdtTileProcessor(Anp::AnpWriter* writer, const std::filesystem::path& outputDir, const std::string& mapName,
+    AdtTileProcessor(Anp::TileSink* writer, const std::filesystem::path& outputDir, const std::string& mapName,
                      const TileBuildConfig& config = {}) noexcept
         : Writer(writer),
           OutputDir(outputDir),

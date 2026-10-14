@@ -92,6 +92,46 @@ bool SegmentHitsTriangle(const float* origin, const float* delta, const float* v
     t = (e2[0] * q[0] + e2[1] * q[1] + e2[2] * q[2]) * inv;
     return true;
 }
+/// Closest hit of a segment on a dynamic mesh (brute force behind its bounds).
+bool RaycastMesh(const DynamicMesh& mesh, const float* origin, const float* delta, float& tMax, uint32_t& triangle)
+{
+    const float inverse[3]{1.0f / delta[0], 1.0f / delta[1], 1.0f / delta[2]};
+
+    if (!SegmentHitsBox(origin, inverse, mesh.bmin, mesh.bmax, tMax))
+    {
+        return false;
+    }
+
+    bool hit = false;
+
+    for (size_t t = 0; t + 2 < mesh.indices.size(); t += 3)
+    {
+        float th = 0.0f;
+
+        if (SegmentHitsTriangle(origin, delta, &mesh.verts[mesh.indices[t] * 3ull],
+                                &mesh.verts[mesh.indices[t + 1] * 3ull], &mesh.verts[mesh.indices[t + 2] * 3ull], th) &&
+            th >= 0.0f && th <= tMax)
+        {
+            tMax = th;
+            triangle = static_cast<uint32_t>(t / 3);
+            hit = true;
+        }
+    }
+
+    return hit;
+}
+
+Vector3 MeshNormal(const DynamicMesh& mesh, uint32_t triangle)
+{
+    const float* v0 = &mesh.verts[mesh.indices[triangle * 3ull] * 3ull];
+    const float* v1 = &mesh.verts[mesh.indices[triangle * 3ull + 1] * 3ull];
+    const float* v2 = &mesh.verts[mesh.indices[triangle * 3ull + 2] * 3ull];
+    const Vector3 e1{v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]};
+    const Vector3 e2{v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]};
+    Vector3 n{e1.y * e2.z - e1.z * e2.y, e1.z * e2.x - e1.x * e2.z, e1.x * e2.y - e1.y * e2.x};
+    const float length = n.Length();
+    return length > 0.0f ? n * (1.0f / length) : Vector3{};
+}
 } // namespace
 
 uint32_t IgnoreBit(uint32_t source, uint8_t area) noexcept
@@ -460,6 +500,38 @@ bool StaticWorld::Raycast(const Vector3& start, const Vector3& end, uint32_t ign
         }
     }
 
+    const DynamicMesh* hitMesh = nullptr;
+    const auto dynamic = GetDynamicMeshes(); // keeps hitMesh alive while a new snapshot is published
+
+    if (dynamic && !(ignore & IGNORE_GAME_OBJECTS))
+    {
+        for (const auto& mesh : *dynamic)
+        {
+            if (RaycastMesh(*mesh, origin, delta, tMax, triangle))
+            {
+                hitMesh = mesh.get();
+            }
+        }
+    }
+
+    if (hitMesh)
+    {
+        hit.hit = true;
+        hit.t = tMax;
+        hit.position = start + (end - start) * tMax;
+        Vector3 normal = MeshNormal(*hitMesh, triangle);
+
+        if (normal.x * delta[0] + normal.y * delta[1] + normal.z * delta[2] > 0.0f)
+        {
+            normal = normal * -1.0f;
+        }
+
+        hit.normal = normal.ToWowCoords();
+        hit.source = hitMesh->source;
+        hit.area = triangle < hitMesh->areas.size() ? hitMesh->areas[triangle] : 0;
+        return true;
+    }
+
     if (!hitTile)
     {
         return true;
@@ -506,7 +578,63 @@ bool StaticWorld::Surfaces(float x, float y, float zTop, float zBottom, uint32_t
     std::vector<std::pair<float, uint32_t>> hits;
     // RD: x = WoW y, z = WoW x, y = up.
     tile->VerticalHits(y, x, zTop, zBottom, ignore, hits);
+    // Dynamic meshes: one downward segment each, every hit (z, triangle | mesh index << 32 in a separate list).
+    struct DynamicHit
+    {
+        float z;
+        const DynamicMesh* mesh;
+        uint32_t triangle;
+    };
+
+    std::vector<DynamicHit> dynamicHits;
+    const auto dynamic = GetDynamicMeshes(); // keeps the meshes of dynamicHits alive
+
+    if (dynamic && !(ignore & IGNORE_GAME_OBJECTS))
+    {
+        const float origin[3]{y, zTop, x};
+        const float delta[3]{0.0f, zBottom - zTop, 0.0f};
+
+        for (const auto& mesh : *dynamic)
+        {
+            if (y < mesh->bmin[0] || y > mesh->bmax[0] || x < mesh->bmin[2] || x > mesh->bmax[2])
+            {
+                continue;
+            }
+
+            for (size_t t = 0; t + 2 < mesh->indices.size(); t += 3)
+            {
+                float th = 0.0f;
+
+                if (SegmentHitsTriangle(origin, delta, &mesh->verts[mesh->indices[t] * 3ull],
+                                        &mesh->verts[mesh->indices[t + 1] * 3ull],
+                                        &mesh->verts[mesh->indices[t + 2] * 3ull], th) &&
+                    th >= 0.0f && th <= 1.0f)
+                {
+                    dynamicHits.push_back({zTop + delta[1] * th, mesh.get(), static_cast<uint32_t>(t / 3)});
+                }
+            }
+        }
+    }
+
     std::sort(hits.begin(), hits.end(), [](const auto& l, const auto& r) { return l.first > r.first; });
+
+    for (const auto& h : dynamicHits)
+    {
+        Surface surface;
+        surface.z = h.z;
+        Vector3 normal = MeshNormal(*h.mesh, h.triangle);
+
+        if (normal.y < 0.0f)
+        {
+            normal = normal * -1.0f;
+        }
+
+        surface.normal = normal.ToWowCoords();
+        surface.source = h.mesh->source;
+        surface.area = h.triangle < h.mesh->areas.size() ? h.mesh->areas[h.triangle] : 0;
+        surface.standable = surface.area != 0 && surface.normal.z >= std::cos(55.0f * 3.14159265f / 180.0f);
+        surfaces.push_back(surface);
+    }
 
     for (const auto& [z, triangle] : hits)
     {
@@ -514,7 +642,8 @@ bool StaticWorld::Surfaces(float x, float y, float zTop, float zBottom, uint32_t
         const uint8_t area = tile->Data().areas[triangle];
 
         // A point on a shared edge or vertex hits every triangle around it: once per surface and source.
-        if (!surfaces.empty() && surfaces.back().z - z < 0.01f && surfaces.back().source == source)
+        if (std::any_of(surfaces.begin(), surfaces.end(),
+                        [&](const Surface& s) { return std::fabs(s.z - z) < 0.01f && s.source == source; }))
         {
             continue;
         }
@@ -536,7 +665,26 @@ bool StaticWorld::Surfaces(float x, float y, float zTop, float zBottom, uint32_t
         surfaces.push_back(surface);
     }
 
+    // Static and dynamic surfaces, highest first; dynamic ones on the same spot as a static one once.
+    std::stable_sort(surfaces.begin(), surfaces.end(), [](const Surface& l, const Surface& r) { return l.z > r.z; });
+    surfaces.erase(std::unique(surfaces.begin(), surfaces.end(),
+                               [](const Surface& l, const Surface& r) {
+                                   return std::fabs(l.z - r.z) < 0.01f && l.source == r.source;
+                               }),
+                   surfaces.end());
     return true;
+}
+
+void StaticWorld::SetDynamicMeshes(std::shared_ptr<const DynamicMeshes> meshes)
+{
+    const std::lock_guard lock(Mutex);
+    Dynamic = std::move(meshes);
+}
+
+std::shared_ptr<const DynamicMeshes> StaticWorld::GetDynamicMeshes() const
+{
+    const std::lock_guard lock(Mutex);
+    return Dynamic;
 }
 
 bool StaticWorld::Sweep(const Vector3& start, const Vector3& end, float radius, float height, float stepHeight,

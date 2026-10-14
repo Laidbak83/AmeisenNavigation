@@ -161,7 +161,11 @@ struct PathOptions
     bool avoidWalls = false;   // keep corners tuning.wallMargin away from the walls they bend around
     bool roundCorners = false; // replace corners by arcs
     bool follow = false;       // reuse the corridor of the client's previous path on this map (GetPath only)
+    bool clearBody = false;    // sweep a body along the path through the static world, go around what blocks it
     PathTuning tuning{};
+    float bodyRadius = 0.4f;   // body swept by clearBody (static world, game objects included)
+    float bodyHeight = 2.0f;
+    float bodyStepHeight = 0.75f; // obstacles up to this height are walked over
 };
 
 /// Limits for PathTuning values (clamped).
@@ -184,6 +188,8 @@ enum PathPointFlags : unsigned char
     PATH_POINT_JUMP = 1 << 3,    // ... by jumping (over a low obstacle or a gap)
     PATH_POINT_DROP = 1 << 4,    // ... by walking off a ledge
     PATH_POINT_LINK = 1 << 5,    // ... by a custom connection (sOffMeshFile, connections of the navmesh file)
+    PATH_POINT_BYPASS = 1 << 6,  // added by clearBody to go around something the body would run into
+    PATH_POINT_BLOCKED = 1 << 7, // clearBody: the body runs into something on the way to the next point (jump?)
 };
 
 /// Details of an ExplorePolygon run.
@@ -311,6 +317,11 @@ public:
     bool Steer(size_t clientId, int mapId, const Vector3& position, const Vector3& velocity, const Vector3& target,
                float maxSpeed, float radius, float deltaTime, std::span<const SteerUnit> units, SteerResult& result);
 
+    /// Replace tiles of a map's navmesh (Detour tile data built at runtime, e.g. around game objects). Waits for
+    /// running requests on the map, holds new ones back meanwhile. The off-mesh connections of sOffMeshFile touching
+    /// the tiles are added again (automatic drop links aren't). Returns the number of tiles replaced.
+    int ReplaceTiles(int mapId, const std::vector<std::vector<unsigned char>>& tiles);
+
     // ── Static world (.anw files next to the navmeshes): collision geometry with provenance ──
 
     /// The map's static world, nullptr if it has none.
@@ -336,6 +347,7 @@ private:
     /// Everything a request needs. Holds the leased query, keep it alive while the query is used.
     struct QueryContext
     {
+        NavMeshLock::Shared meshLock; // first member: released last, after the query went back to the pool
         std::shared_ptr<AmeisenNavClient> client;
         NavMeshQueryPool::Lease lease;
         dtNavMeshQuery* query = nullptr;
@@ -447,6 +459,12 @@ private:
     /// True if the navmesh surface leads straight from a to b (raycast along it reaching b's height).
     static bool SegmentClear(const dtNavMeshQuery* query, const dtQueryFilter* filter, const Vector3& a,
                              const Vector3& b) noexcept;
+
+    /// Sweep the body of options along the path (RD) through the map's static world: a segment the body can't walk
+    /// gets a point beside the obstacle (on the navmesh, both new segments clear) or is flagged PATH_POINT_BLOCKED.
+    /// Off-mesh connections are left alone, nothing happens without a static world.
+    void ClearBody(const dtNavMeshQuery* query, const dtQueryFilter* filter, int mapId, Path& path,
+                   unsigned char* flags, const PathOptions& options) noexcept;
 
     static void ShortcutPath(const dtNavMeshQuery* query, const dtQueryFilter* filter, Path& path) noexcept;
     static void CutAtStopDistance(const dtNavMeshQuery* query, const dtQueryFilter* filter, Path& path,

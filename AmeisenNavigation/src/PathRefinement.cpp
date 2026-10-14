@@ -1,6 +1,7 @@
 #include "AmeisenNavigation.hpp"
 
 #include <cfloat>
+#include <algorithm>
 #include <cmath>
 #include <vector>
 
@@ -503,4 +504,106 @@ bool AmeisenNavigation::CalculateFollowPath(dtNavMeshQuery* query, const dtQuery
     }
 
     return true;
+}
+
+void AmeisenNavigation::ClearBody(const dtNavMeshQuery* query, const dtQueryFilter* filter, int mapId, Path& path,
+                                  unsigned char* flags, const PathOptions& options) noexcept
+{
+    World::StaticWorld* world = Worlds.Get(mapId);
+
+    if (!world || path.pointCount < 2)
+    {
+        return;
+    }
+
+    const float radius = std::clamp(options.bodyRadius, 0.0f, 5.0f);
+    const float height = std::clamp(options.bodyHeight, 0.5f, 10.0f);
+    const float step = std::clamp(options.bodyStepHeight, 0.0f, height - 0.1f);
+
+    const auto blocked = [&](const Vector3& rdA, const Vector3& rdB, World::Hit& hit) {
+        Vector3 a = rdA;
+        Vector3 b = rdB;
+        return world->Sweep(a.ToWowCoords(), b.ToWowCoords(), radius, height, step, 0, hit) && hit.hit;
+    };
+
+    try
+    {
+        std::vector<Vector3> points(path.points, path.points + path.pointCount);
+        std::vector<unsigned char> pointFlags(flags, flags + path.pointCount);
+        constexpr int MAX_CHECKS = 256;
+
+        for (size_t i = 0; i + 1 < points.size() && static_cast<int>(i) < MAX_CHECKS; ++i)
+        {
+            World::Hit hit;
+
+            if ((pointFlags[i] & PATH_POINT_OFFMESH) || !blocked(points[i], points[i + 1], hit))
+            {
+                continue;
+            }
+
+            // Candidates beside the obstacle: where the body stops plus a bit, shifted to either side, further out
+            // each time. Each has to be on the navmesh, reachable on it and clear for the body both ways.
+            Vector3 stop = hit.position;
+            stop.ToRDCoords();
+            Vector3 dir = points[i + 1] - points[i];
+            dir.y = 0.0f;
+            const float length = dir.Length();
+
+            if (length < 0.01f)
+            {
+                continue;
+            }
+
+            dir = dir * (1.0f / length);
+            const Vector3 side{-dir.z, 0.0f, dir.x};
+            bool bypassed = false;
+
+            for (const float offset : {radius + 1.0f, radius + 2.5f, radius + 4.5f})
+            {
+                for (const float sign : {1.0f, -1.0f})
+                {
+                    const Vector3 candidate = stop + dir * (radius + 0.5f) + side * (offset * sign);
+                    PolyPosition snapped;
+                    World::Hit unused;
+
+                    if (!FindNearestPoly(query, filter, candidate, snapped)
+                        || std::fabs(snapped.pos.y - candidate.y) > 3.0f
+                        || !SegmentClear(query, filter, points[i], snapped.pos)
+                        || !SegmentClear(query, filter, snapped.pos, points[i + 1])
+                        || blocked(points[i], snapped.pos, unused) || blocked(snapped.pos, points[i + 1], unused))
+                    {
+                        continue;
+                    }
+
+                    if (static_cast<int>(points.size()) >= path.maxSize)
+                    {
+                        break;
+                    }
+
+                    points.insert(points.begin() + static_cast<std::ptrdiff_t>(i) + 1, snapped.pos);
+                    pointFlags.insert(pointFlags.begin() + static_cast<std::ptrdiff_t>(i) + 1, PATH_POINT_BYPASS);
+                    bypassed = true;
+                    i++; // both new segments are clear
+                    break;
+                }
+
+                if (bypassed)
+                {
+                    break;
+                }
+            }
+
+            if (!bypassed)
+            {
+                pointFlags[i] |= PATH_POINT_BLOCKED;
+            }
+        }
+
+        std::copy(points.begin(), points.end(), path.points);
+        std::copy(pointFlags.begin(), pointFlags.end(), flags);
+        path.pointCount = static_cast<int>(points.size());
+    }
+    catch (...)
+    {
+    }
 }

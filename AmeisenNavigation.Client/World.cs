@@ -62,6 +62,29 @@ namespace AmeisenNavigation.Client
     public readonly record struct WorldSurface(float Z, Vector3 Normal, WorldSource Source, byte Area, bool Standable,
                                                bool Liquid);
 
+    /// <summary>A game object the bot sees (from the object manager), for <see cref="AmeisenNavClient.SetObjects"/>.</summary>
+    /// <param name="Guid">Object guid, the same object is updated in place.</param>
+    /// <param name="DisplayId">GameObjectDisplayInfo id (the exporter wrote its collision model).</param>
+    /// <param name="Rotation">Quaternion (x, y, z, w) of the object, all zero = none.</param>
+    /// <param name="Blocking">Its collision is in the way (a closed door). False keeps it but out of the way.</param>
+    public readonly record struct WorldObject(ulong Guid, uint DisplayId, Vector3 Position, Quaternion Rotation,
+                                              float Scale = 1f, bool Blocking = true);
+
+    /// <summary>A rotation quaternion.</summary>
+    public readonly record struct Quaternion(float X, float Y, float Z, float W)
+    {
+        public static readonly Quaternion None = new(0f, 0f, 0f, 0f);
+
+        /// <summary>Rotation by an orientation around the z axis (radians), like a game object's facing.</summary>
+        public static Quaternion FromOrientation(float orientation)
+            => new(0f, 0f, MathF.Sin(orientation * 0.5f), MathF.Cos(orientation * 0.5f));
+    }
+
+    /// <summary>Result of <see cref="AmeisenNavClient.SetObjects"/>.</summary>
+    /// <param name="Accepted">Objects whose model the server knows, -1 if the map can't change (no static world).</param>
+    /// <param name="PendingTiles">Navmesh tiles still being rebuilt: paths see the objects once this reaches 0.</param>
+    public readonly record struct SetObjectsResult(int Accepted, int PendingTiles);
+
     /// <summary>Result of <see cref="AmeisenNavClient.GetSurfaces"/>: highest first, and the AreaTable id there
     /// (0 = unknown).</summary>
     public sealed record WorldSurfaces(IReadOnlyList<WorldSurface> Surfaces, uint AreaId);

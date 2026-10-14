@@ -509,7 +509,8 @@ MapExportStats BuildMap(unsigned int mapId, const std::string& mapName, const Ex
 
         WorldBuildStats world;
 
-        if (WriteWorld(map.geometry, worldAdts, map.chunkAreas, static_cast<int>(mapId), options.outputDir, &world))
+        if (WriteWorld(map.geometry, worldAdts, map.chunkAreas, static_cast<int>(mapId), options.outputDir, &world,
+                       &buildConfig, &params, &map.water, &map.roads, &map.cities, &map.factions))
         {
             stats.worldTiles = world.tiles;
             stats.worldBytes = world.bytes;
@@ -674,6 +675,60 @@ void LogExportSummary(const ExportReport& report, std::chrono::steady_clock::tim
     else
     {
         LogS("Export finished: ", exported, " map(s) exported in ", Logger::FormatDuration(seconds));
+    }
+}
+
+/// Collision models of every game object display (gameobjects.ano), for objects the server adds at runtime.
+/// load adds a model (model space) to the structure, false if there is none.
+void WriteObjectModels(const std::filesystem::path& outputDir, const std::unordered_map<unsigned int, std::string>& displays,
+                       const std::function<bool(const std::string&, Structure*)>& load)
+{
+    const auto start = std::chrono::steady_clock::now();
+    std::unordered_map<std::string, int> modelIndex; // lower case name -> index, -1 = no collision
+    std::vector<AnpWorld::Tile> models;
+    std::vector<std::pair<uint32_t, uint32_t>> table;
+    std::vector<std::pair<unsigned int, std::string>> sorted(displays.begin(), displays.end());
+    std::sort(sorted.begin(), sorted.end());
+
+    for (const auto& [displayId, name] : sorted)
+    {
+        const std::string key = GameObjects::Lower(name);
+        auto it = modelIndex.find(key);
+
+        if (it == modelIndex.end())
+        {
+            Structure model;
+            const bool ok = load(name, &model) && !model.tris.empty();
+
+            if (ok)
+            {
+                model.Clean();
+                models.push_back(ObjectModels::ToTile(model));
+            }
+
+            it = modelIndex.emplace(key, ok ? static_cast<int>(models.size()) - 1 : -1).first;
+        }
+
+        if (it->second >= 0)
+        {
+            table.emplace_back(displayId, static_cast<uint32_t>(it->second));
+        }
+    }
+
+    if (table.empty())
+    {
+        return;
+    }
+
+    if (ObjectModels::Write(outputDir, table, models))
+    {
+        const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+        LogI(std::format("Saved {}: {} displays, {} models with collision, in {}", ObjectModels::FILE_NAME,
+                         table.size(), models.size(), Logger::FormatDuration(seconds)));
+    }
+    else
+    {
+        LogW("Failed to save ", ObjectModels::FILE_NAME);
     }
 }
 
@@ -966,10 +1021,26 @@ ExportReport RunTcExport(const ExportOptions& options)
             client.gameObjects[spawn.mapId].push_back(spawn);
         }
 
-        client.gameObjectModels =
-            TcData::ParseGameObjectModels(TcData::ReadFile(client.dir / "vmaps" / "GameObjectModels.dtree"));
-        LogI(std::format("Game objects: {} spawns from \"{}\" ({} invalid lines), {} models in GameObjectModels.dtree",
-                         spawns.size(), options.gameObjects.string(), invalid, client.gameObjectModels.size()));
+        LogI(std::format("Game objects: {} spawns from \"{}\" ({} invalid lines)", spawns.size(),
+                         options.gameObjects.string(), invalid));
+    }
+
+    client.gameObjectModels =
+        TcData::ParseGameObjectModels(TcData::ReadFile(client.dir / "vmaps" / "GameObjectModels.dtree"));
+
+    if (options.writeWorld)
+    {
+        TcModelCache models(client.dir / "vmaps");
+        WriteObjectModels(options.outputDir, client.gameObjectModels, [&](const std::string& name, Structure* model) {
+            const auto vmo = models.Get(name);
+
+            if (vmo)
+            {
+                TcData::AddWorldModel(*vmo, [](const Vector3& v) { return v; }, model, DOODAD, client.liquidTypes);
+            }
+
+            return vmo != nullptr;
+        });
     }
 
     report.setupOk = true;
@@ -1124,15 +1195,25 @@ ExportReport RunExport(const ExportOptions& options)
             client.gameObjects[spawn.mapId].push_back(spawn);
         }
 
-        client.gameObjectModels =
-            GameObjects::LoadDisplayModels(reader.GetFileContent<Dbc>("DBFilesClient\\GameObjectDisplayInfo.dbc"));
-        LogI(std::format("Game objects: {} spawns from \"{}\" ({} invalid lines), {} display models", spawns.size(),
-                         options.gameObjects.string(), invalid, client.gameObjectModels.size()));
+        LogI(std::format("Game objects: {} spawns from \"{}\" ({} invalid lines)", spawns.size(),
+                         options.gameObjects.string(), invalid));
 
         if (spawns.empty())
         {
             LogW("No game object spawns read from \"", options.gameObjects.string(), "\"");
         }
+    }
+
+    client.gameObjectModels =
+        GameObjects::LoadDisplayModels(reader.GetFileContent<Dbc>("DBFilesClient\\GameObjectDisplayInfo.dbc"));
+
+    if (options.writeWorld)
+    {
+        WriteObjectModels(options.outputDir, client.gameObjectModels, [&](const std::string& name, Structure* model) {
+            GameObjectSpawn identity;
+            return GameObjects::Add(identity, name, reader, model, client.liquidTypes);
+        });
+        reader.Clear();
     }
 
     report.setupOk = true;

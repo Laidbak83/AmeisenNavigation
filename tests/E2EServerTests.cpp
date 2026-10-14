@@ -1044,3 +1044,64 @@ TEST_CASE(Server_StaticWorldQueries)
     std::memcpy(&header, small->data(), sizeof(header));
     CHECK_EQ(header.count, -1);
 }
+
+TEST_CASE(Server_SetObjects)
+{
+    ServerFixture server;
+    RawClient client(server.Port());
+    REQUIRE(client.Connected());
+
+    const auto request = [&](int mapId, std::vector<ObjectData> objects, std::vector<unsigned long long> removed) {
+        std::vector<char> packet(sizeof(SetObjectsHeader) + objects.size() * sizeof(ObjectData)
+                                 + removed.size() * 8);
+        const SetObjectsHeader header{mapId, static_cast<int>(objects.size()), static_cast<int>(removed.size()), 0};
+        std::memcpy(packet.data(), &header, sizeof(header));
+        std::memcpy(packet.data() + sizeof(header), objects.data(), objects.size() * sizeof(ObjectData));
+        std::memcpy(packet.data() + sizeof(header) + objects.size() * sizeof(ObjectData), removed.data(),
+                    removed.size() * 8);
+        REQUIRE(client.SendRequest(static_cast<unsigned char>(MessageType::SET_OBJECTS), packet.data(), packet.size()));
+        const auto response = client.ReadResponse(static_cast<unsigned char>(MessageType::SET_OBJECTS));
+        REQUIRE(response && response->size() == sizeof(SetObjectsResponse));
+        SetObjectsResponse out{};
+        std::memcpy(&out, response->data(), sizeof(out));
+        return out;
+    };
+
+    ObjectData gate{};
+    gate.guid = 42;
+    gate.displayId = TestWorld::GATE_DISPLAY;
+    gate.flags = OBJECT_BLOCKING;
+    gate.position = Wow(TestWorld::WALL_X, 0.0f, -50.0f);
+    gate.scale = 1.0f;
+    ObjectData unknown = gate;
+    unknown.guid = 43;
+    unknown.displayId = 1;
+
+    auto response = request(TestWorld::MAP_ID, {gate, unknown}, {});
+    CHECK_EQ(response.accepted, 1);
+    REQUIRE(server.Get().Objects().WaitIdle(std::chrono::seconds(60)));
+
+    // The gate is in the way of the line of sight and the path goes around the wall's south end.
+    LineOfSightData los{TestWorld::MAP_ID, 0, Wow(-310.0f, 1.5f, -50.0f), Wow(-290.0f, 1.5f, -50.0f)};
+    auto reply = client.Request(MessageType::LINE_OF_SIGHT, los);
+    REQUIRE(reply && reply->size() == sizeof(WorldHitResponse));
+    WorldHitResponse hit{};
+    std::memcpy(&hit, reply->data(), sizeof(hit));
+    CHECK_EQ(hit.result, 1);
+    CHECK_EQ(hit.source, AnpWorld::MakeSource(AnpWorld::SourceKind::GAME_OBJECT, TestWorld::GATE_DISPLAY));
+
+    response = request(TestWorld::MAP_ID, {}, {42ull});
+    CHECK_EQ(response.accepted, 0);
+    REQUIRE(server.Get().Objects().WaitIdle(std::chrono::seconds(60)));
+    CHECK_EQ(server.Get().Objects().ObjectCount(TestWorld::MAP_ID), size_t{0});
+
+    // A map without a static world, a size that doesn't match the counts.
+    CHECK_EQ(request(4242, {gate}, {}).accepted, -1);
+    const SetObjectsHeader lying{TestWorld::MAP_ID, 3, 0, 0};
+    REQUIRE(client.SendRequest(static_cast<unsigned char>(MessageType::SET_OBJECTS), &lying, sizeof(lying)));
+    const auto bad = client.ReadResponse(static_cast<unsigned char>(MessageType::SET_OBJECTS));
+    REQUIRE(bad && bad->size() == sizeof(SetObjectsResponse));
+    SetObjectsResponse badResponse{};
+    std::memcpy(&badResponse, bad->data(), sizeof(badResponse));
+    CHECK_EQ(badResponse.accepted, -1);
+}

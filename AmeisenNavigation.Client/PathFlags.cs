@@ -46,6 +46,14 @@ namespace AmeisenNavigation.Client
         /// <summary>GetPathEx only: random offsets like <see cref="AmeisenNavClient.GetRandomPath"/>. Protocol 3.</summary>
         Randomize = 1 << 10,
 
+        /// <summary>
+        /// Sweep a body (server's fBodyRadius, fBodyHeight, fBodyStepHeight) along the path through the static world
+        /// and game objects: goes around what the navmesh doesn't know (an object whose tile isn't rebuilt yet, a
+        /// fence on navmeshes that walk over them), flags what it can't go around (<see cref="PathPointFlags.Blocked"/>).
+        /// Protocol 4, needs a .anw file.
+        /// </summary>
+        ClearBody = 1 << 11,
+
         /// <summary>Smooth natural movement: shortcuts, distance to walls and round corners.</summary>
         Fluid = AvoidWalls | Shortcut | RoundCorners,
     }
@@ -69,6 +77,13 @@ namespace AmeisenNavigation.Client
 
         /// <summary>... by a custom connection (server's off-mesh file or the navmesh file's connections).</summary>
         Link = 1 << 5,
+
+        /// <summary>Added by <see cref="PathFlags.ClearBody"/> to go around something the body would run into.</summary>
+        Bypass = 1 << 6,
+
+        /// <summary><see cref="PathFlags.ClearBody"/>: something is in the way to the next point that the body can't
+        /// walk over or around nearby (jump, or open the door).</summary>
+        Blocked = 1 << 7,
     }
 
     /// <summary>

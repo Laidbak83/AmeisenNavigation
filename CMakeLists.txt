@@ -154,7 +154,8 @@ endif()
 add_library(anav_pack STATIC ${CMAKE_CURRENT_SOURCE_DIR}/AmeisenNavigation.Pack/src/miniz/miniz.c)
 target_include_directories(anav_pack PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/AmeisenNavigation.Pack/src)
 # ANP archives are read from / written to memory, the stdio file API of miniz isn't needed.
-target_compile_definitions(anav_pack PUBLIC MINIZ_NO_STDIO)
+# No file times: they are never used and mktime/tzset in glibc races between threads reading archives (TSan).
+target_compile_definitions(anav_pack PUBLIC MINIZ_NO_STDIO MINIZ_NO_TIME)
 target_link_libraries(anav_pack PUBLIC anav_recast)
 if(OpenMP_CXX_FOUND)
     target_link_libraries(anav_pack PUBLIC OpenMP::OpenMP_CXX)
@@ -181,9 +182,11 @@ endif()
 # ── AmeisenNavigation.Server ──
 
 if(ANAV_BUILD_SERVER OR ANAV_BUILD_TESTS)
-    add_library(anav_server_lib STATIC ${CMAKE_CURRENT_SOURCE_DIR}/AmeisenNavigation.Server/src/NavServer.cpp)
+    add_library(anav_server_lib STATIC ${CMAKE_CURRENT_SOURCE_DIR}/AmeisenNavigation.Server/src/NavServer.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/AmeisenNavigation.Server/src/World/DynamicWorld.cpp)
     target_include_directories(anav_server_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/AmeisenNavigation.Server/src)
-    target_link_libraries(anav_server_lib PUBLIC anav_core antcp_server PRIVATE anav_options)
+    # The exporter's tile builder rebuilds navmesh tiles around game objects at runtime.
+    target_link_libraries(anav_server_lib PUBLIC anav_core antcp_server anav_exporter_core PRIVATE anav_options)
 endif()
 
 if(ANAV_BUILD_SERVER)

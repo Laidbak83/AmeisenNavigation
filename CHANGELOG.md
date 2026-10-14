@@ -1,6 +1,11 @@
 # Changelog
 
-## Unreleased (protocol 4)
+## 1.12.0.0 (protocol 4)
+
+The world beyond the navmesh, after studying namigator (static geometry next to the navmesh, game objects rebuilt at
+runtime) and a comparison of runtime topologies: what is where, where it comes from, and what changes. Protocol 3
+clients keep working (new messages and flags only); servers without `.anw` files answer the new queries with "no
+static world". Re-export to get the `.anw` and `gameobjects.ano` files.
 
 ### Static world
 
@@ -17,6 +22,51 @@
     height (rays at three heights on the center and both sides)
 - C# client: `LineOfSight`, `GetSurfaces`, `Sweep` (`WorldHit`, `WorldSurface(s)`, `WorldSource`, `WorldIgnore`).
 - Config: `sWorldPath`, `iWorldCacheTiles`.
+
+### Game objects at runtime
+
+- `18` SET_OBJECTS: add, move, open/close or remove game objects (guid, display id, position, rotation, scale). Their
+  collision is in the static world queries at once; the navmesh tiles around them are rebuilt in the background with
+  the export's settings and area rects (stored in the `.anw`) and swapped in while requests on the map wait. A
+  closed gate makes paths go around, opened or removed they go through again (tests). C#: `SetObjects`
+  (`WorldObject`, `Quaternion`, `SetObjectsResult`).
+- Exporter: `gameobjects.ano`, the collision models of every game object display (GameObjectDisplayInfo.dbc, or
+  `GameObjectModels.dtree` with `--tc-data`), and the build settings and area rects per ADT in the `.anw`.
+- Path flag `2048` CLEAR_BODY (PATH, RANDOM_PATH, PATH_EX): a body (`fBodyRadius`, `fBodyHeight`,
+  `fBodyStepHeight`) is swept along the path through the static world and the game objects; a segment it can't walk
+  gets a point beside the obstacle (on the navmesh, both new segments clear, point flag `64` BYPASS) or the point flag
+  `128` BLOCKED. Catches what the navmesh doesn't know yet (an object whose tile is still being rebuilt) and fences
+  on navmeshes that walk over them (TrinityCore's, with a `.anw` from `--tc-data`). C#: `PathFlags.ClearBody`,
+  `PathPointFlags.Bypass`/`Blocked`.
+- Navmesh requests hold a per map readers/writer lock (re-entrant for a thread, writers wait for running requests);
+  replacing tiles takes it exclusively.
+
+### Fixed
+
+- A data race in glibc's `tzset` when several threads read archives (miniz converted ZIP entry times nobody uses):
+  miniz is built with `MINIZ_NO_TIME`.
+- A racy check in the stats test (the last request is recorded after its answer went out).
+
+### Tested
+
+Unit, end-to-end and exporter suites in Release and with ASan+UBSan, the end-to-end suite with TSan (requests on
+four threads while a gate is opened and closed and its tile replaced), the C# client against the real server, the
+fuzzers (new `FuzzWorld` for `.anw` tiles and their bounding volume hierarchy, protocol fuzzing with the new
+messages). TSan found a use after free in the first version of the dynamic object queries and fuzzing a `memcpy` with
+a null pointer for empty tiles, both fixed before release. Not tested on real client data (no client available):
+`.anw` sizes are measured on synthetic ADTs, tile rebuild times on the test world (~50 ms) and the benchmark ADT
+(~0.7 s).
+
+### Limits and leads
+
+- SWEEP and CLEAR_BODY approximate the body with 9 rays: a thin horizontal deck between the rays isn't seen.
+- Rebuilt tiles drop the server's automatic drop links (`fAutoDropHeight`); the export's jump/drop links and the
+  `sOffMeshFile` connections are rebuilt.
+- Objects are world state shared by all clients of a navigation server: bots on different realms (where the same
+  door can be open on one and closed on the other) need one navigation server per realm.
+- Leads: a native CASC reader (wow.export's readers document the formats: split ADTs, FileDataIDs, WDC DB2) to skip
+  the TrinityCore extraction; per client object sets; step transitions (door thresholds) from the surfaces along a
+  path.
 
 ## 1.11.0.0
 

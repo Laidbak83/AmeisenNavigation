@@ -21,6 +21,8 @@ TCP navigation server and navmesh exporter for World of Warcraft bots (built for
   format and automatic drop-down links from ledges
 - Avoid zones per client (danger areas), shared stuck reports (places bots got stuck are avoided by everyone), terrain
   rules (forbid water for a bot that can't swim, allow steep slopes), local steering around other units
+- Game objects at runtime: doors and gates the bot sees change the navmesh (tiles rebuilt in the background) and the
+  line of sight
 - Static world: the collision geometry next to the navmesh with the provenance of every triangle (terrain, WMO, M2,
   liquid, game object, with their ids): line of sight for spells (trees optional), every surface under a point
   (decks, bridges, floors, water) with the zone's AreaTable id, a standing body swept along a segment (what it runs
@@ -65,6 +67,7 @@ docker run -d -p 47110:47110 -v /srv/meshes:/meshes:ro ameisennav
 | `iMmapFormat` | `0` | `0` auto detect, `1` TrinityCore 3.3.5a, `2` SkyFire 5.4.8, `3` TrinityCore master (MMAP v16), `-1` custom patterns |
 | `sWorldPath` | empty | Folder of the static worlds (`.anw`), empty = `sMmapsPath` |
 | `iWorldCacheTiles` | `48` | Static world tiles kept in memory per map |
+| `fBodyRadius`, `fBodyHeight`, `fBodyStepHeight` | `0.4`, `2`, `0.75` | Body swept by the clear body path flag; obstacles up to the step height are walked over |
 | `sParentMaps` | empty | MMAPs: `child:parent` map pairs (Map.db2 ParentMapID), a child map without its own files uses the parent's, e.g. `2552:0` |
 | `sCustomMmapPattern` / `sCustomMmtilePattern` | TC 3.3.5a names | `std::format` patterns for `iMmapFormat=-1` (args: mapId, x, y) |
 | `sPreloadMaps` | empty | Comma separated map ids loaded at startup, e.g. `0,1,530,571` |
@@ -105,7 +108,8 @@ AmeisenNavigation.Exporter --tc-data <folder> --output <mesh folder> [options]  
   -d, --debug          Debug logging + area debug images (<output>/debug/area_<map>_<x>_<y>.bmp)
   -l, --list-maps      List the maps in Map.dbc (or the maps with files in --tc-data)
       --no-world       Don't write the static world (.anw: collision geometry with provenance, ~350 KB per ADT of
-                       terrain plus the models, needed for LINE_OF_SIGHT, SURFACES and SWEEP)
+                       terrain plus the models, needed for LINE_OF_SIGHT, SURFACES, SWEEP and SET_OBJECTS) and
+                       gameobjects.ano (collision models of every game object display)
   -g, --gameobjects <file> Add the collision of game object spawns (see Game objects)
       --area-table <csv>   With --tc-data: AreaTable as CSV, for faction and city areas
       --liquid-types <csv> With --tc-data: LiquidType as CSV, for the kind of WMO liquids
@@ -261,11 +265,13 @@ request gets exactly one response with the same type. Positions are WoW coordina
 | `15` LINE_OF_SIGHT | `int mapId, int ignore, Vector3 start, Vector3 end` | `int result (1 hit, 0 clear, -1 no static world), float t, Vector3 position, Vector3 normal, uint32 source, int area` |
 | `16` SURFACES | `int mapId, int ignore, float x, float y, float zTop, float zBottom` | `int count (-1 no static world), uint32 areaId, {float z, Vector3 normal, uint32 source, uint8 area, uint8 flags, uint16}[count]` |
 | `17` SWEEP | `int mapId, int ignore, Vector3 start, Vector3 end, float radius, float height, float stepHeight` | same as LINE_OF_SIGHT, `position` = where the body stops |
+| `18` SET_OBJECTS | `int mapId, int count, int removeCount, int 0, {uint64 guid, uint32 displayId, uint32 flags (1 = blocking), Vector3 position, float rotation[4], float scale}[count], uint64 removedGuids[removeCount]` | `int accepted (-1 = map can't change), int pendingTiles` |
 
 Path flags: `1` Chaikin, `2` Catmull-Rom, `4` Bezier (one smoothing), `8` validate with closest point on poly,
 `16` validate with move along surface, `32` require a complete path (fail if the end is unreachable instead of
 returning a path to the closest reachable point), `64` wall margin, `128` shortcut, `256` round corners, `512` follow
-(PATH and PATH_EX), `1024` random offsets (PATH_EX). Client states: `0` normal, `1` Alliance, `2` Horde, `3` dead.
+(PATH and PATH_EX), `1024` random offsets (PATH_EX), `2048` clear body (static world: sweep a body along the path, go
+around what it runs into). Client states: `0` normal, `1` Alliance, `2` Horde, `3` dead.
 Unknown message types get an empty response. The protocol version (GET_CONFIG) tells clients what is available:
 `2` (1.9) EXPLORE_POLY and flag `32`, `3` (1.10) everything else. Older clients simply ignore the GET_CONFIG trailer,
 older servers ignore the new flags and the tuning trailer.
@@ -285,7 +291,9 @@ the start stays within 3 yards of it and the target within 10 yards of the previ
 same between requests and a request is cheap. Anything else searches again.
 
 **PATH_EX point flags**: `1` start, `2` end, `4` an off-mesh connection starts here (the next point is where it ends),
-then how to take it: `8` jump, `16` drop (walk off the ledge), `32` custom link.
+then how to take it: `8` jump, `16` drop (walk off the ledge), `32` custom link. With `2048` clear body: `64` a point
+added to go around an obstacle the navmesh doesn't know, `128` the body runs into something on the way to the next
+point and there is no way around it nearby (jump, open the door).
 
 **Static world** (protocol 4): `{mapId:03}.anw` files written by the exporter next to the `.anp` (`sWorldPath`
 to keep them elsewhere, `--no-world` to skip them). Tiles are read when a query needs them and kept per map
@@ -298,6 +306,16 @@ LINE_OF_SIGHT. SURFACES flags: `1` standable (walkable, not too steep), `2` liqu
 (above `stepHeight`, middle, head) along the center and both sides, its front included: it catches what the navmesh
 rounds away (posts, branches at head height) but not a thin horizontal deck between the rays. Segments are limited
 to 1000 yards.
+
+**Game objects at runtime** (SET_OBJECTS): doors, gates, the platforms of elevators, chests... as the bot's object
+manager sees them (guid, display id, position, rotation quaternion, scale, blocking = closed). Their collision models
+come from `gameobjects.ano` (written by the exporter for every display of GameObjectDisplayInfo.dbc, or of
+TrinityCore's `GameObjectModels.dtree` with `--tc-data`). LINE_OF_SIGHT, SURFACES and SWEEP see them at once; the
+navmesh tiles around them are rebuilt in the background with the export's settings and areas (stored in the `.anw`)
+and swapped in while requests on the map wait (~50 ms for a test tile, about a second for a continent ADT): paths
+see them once `pendingTiles` is 0. Objects are world state shared by all clients (up to 4096 per map); an object
+sent again unchanged costs nothing, a blocking flag of 0 keeps it but out of the way (an open door). Rebuilt tiles keep
+the export's jump/drop links and the `sOffMeshFile` connections, not the automatic drop links.
 
 **Off-mesh connections.** Area ids `40` jump, `41` drop, `42` link, polygon flags `64` jump, `128` drop, the same for
 ANP and MMAP navmeshes. Jumps are excluded by the default filters (a bot has to jump there): enable them with a
@@ -351,6 +369,7 @@ RaycastHit hit = nav.CastRayEx(0, position, target);
 WorldHit view = nav.LineOfSight(0, eyes, targetEyes, WorldIgnore.Doodads); // view.Source: Wmo 1234, Terrain...
 WorldSurfaces? floors = nav.GetSurfaces(0, x, y, z + 50f, z - 50f);       // decks, bridges, water, AreaId
 WorldHit bump = nav.Sweep(0, position, nextWaypoint, radius: 0.5f, height: 2f);
+nav.SetObjects(0, [new WorldObject(door.Guid, door.DisplayId, door.Position, door.Rotation, Blocking: !door.IsOpen)]);
 Vector3[]? route = nav.ExplorePolygon(0, position, grindArea, spacing: 40f);
 ServerConfig? config = nav.GetConfig(); // ProtocolVersion, MaxPointPath, ServerVersion, ...
 ```

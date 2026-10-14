@@ -21,6 +21,7 @@
     <ClCompile Include="src\NavServer.cpp">
       <Filter>Quelldateien</Filter>
     </ClCompile>
+    <ClCompile Include="src\World\DynamicWorld.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\NavServer.hpp">
@@ -35,6 +36,7 @@
     <ClInclude Include="resource.h">
       <Filter>Headerdateien</Filter>
     </ClInclude>
+    <ClInclude Include="src\World\DynamicWorld.hpp" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="AmeisenNavigation.Server.rc">

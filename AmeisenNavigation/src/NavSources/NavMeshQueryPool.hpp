@@ -4,6 +4,8 @@
 #include <atomic>
 #include <memory>
 #include <mutex>
+
+#include "NavMeshLock.hpp"
 #include <thread>
 #include <vector>
 
@@ -24,6 +26,7 @@ class NavMeshQueryPool
 
     std::mutex Mutex;
     std::vector<NavMeshQueryPtr> Idle;
+    NavMeshLock MeshLock;
     std::atomic<size_t> Created{0};
 
     /// Hands a leased query back to its pool.
@@ -44,6 +47,9 @@ public:
           MaxIdle(maxIdle > 0 ? maxIdle : std::max<size_t>(8, 2 * std::thread::hardware_concurrency()))
     {
     }
+
+    /// Requests hold it shared while they use the navmesh, replacing tiles holds it exclusively.
+    NavMeshLock& Lock() noexcept { return MeshLock; }
 
     NavMeshQueryPool(const NavMeshQueryPool&) = delete;
     NavMeshQueryPool& operator=(const NavMeshQueryPool&) = delete;

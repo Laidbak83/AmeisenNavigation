@@ -49,6 +49,7 @@ namespace AmeisenNavigation.Client
             LineOfSight,
             Surfaces,
             Sweep,
+            SetObjects,
         }
 
         private readonly AnTcpClient _client;
@@ -349,6 +350,64 @@ namespace AmeisenNavigation.Client
                     var response = _client.Send((byte)MessageType.Surfaces, request);
                     return ParseSurfaces(response.Data);
                 }, null);
+            }
+        }
+
+        /// <summary>Most objects (set + removed) per <see cref="SetObjects"/> call.</summary>
+        public const int MaxObjectsPerRequest = 512;
+
+        /// <summary>
+        /// Tell the server about game objects (doors, gates, elevators' platforms, chests...) and remove others by
+        /// guid. Their collision is in line of sight, surface and sweep queries at once; the navmesh tiles around them
+        /// are rebuilt in the background (<see cref="SetObjectsResult.PendingTiles"/>). Objects are shared by every
+        /// client of the server (they are world state). Requires protocol version 4, a .anw file for the map and
+        /// gameobjects.ano (exporter 1.12+).
+        /// </summary>
+        public SetObjectsResult SetObjects(int mapId, IReadOnlyList<WorldObject> objects,
+                                           IReadOnlyList<ulong>? removed = null)
+        {
+            int count = objects?.Count ?? 0;
+            int removeCount = removed?.Count ?? 0;
+
+            if (count + removeCount > MaxObjectsPerRequest)
+                return new SetObjectsResult(-1, 0);
+
+            int headerSize = Marshal.SizeOf<SetObjectsHeader>();
+            int objectSize = Marshal.SizeOf<ObjectData>();
+            byte[] buffer = new byte[headerSize + count * objectSize + removeCount * 8];
+            var header = new SetObjectsHeader { MapId = mapId, Count = count, RemoveCount = removeCount };
+            MemoryMarshal.Write(buffer.AsSpan(0, headerSize), in header);
+
+            for (int i = 0; i < count; i++)
+            {
+                var o = objects![i];
+                var data = new ObjectData
+                {
+                    Guid = o.Guid,
+                    DisplayId = o.DisplayId,
+                    Flags = o.Blocking ? 1u : 0u,
+                    Position = o.Position,
+                    RotationX = o.Rotation.X,
+                    RotationY = o.Rotation.Y,
+                    RotationZ = o.Rotation.Z,
+                    RotationW = o.Rotation.W,
+                    Scale = o.Scale,
+                };
+                MemoryMarshal.Write(buffer.AsSpan(headerSize + i * objectSize, objectSize), in data);
+            }
+
+            for (int i = 0; i < removeCount; i++)
+                BitConverter.TryWriteBytes(buffer.AsSpan(headerSize + count * objectSize + i * 8, 8), removed![i]);
+
+            lock (_lock)
+            {
+                return SendWithReconnect(() =>
+                {
+                    var response = _client.SendBytes((byte)MessageType.SetObjects, buffer);
+                    return response.TryAs(out SetObjectsResponse result)
+                        ? new SetObjectsResult(result.Accepted, result.PendingTiles)
+                        : new SetObjectsResult(-1, 0);
+                }, new SetObjectsResult(-1, 0));
             }
         }
 

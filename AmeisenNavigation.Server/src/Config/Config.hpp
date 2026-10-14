@@ -31,6 +31,9 @@ struct AmeisenNavConfig
     float autoDropHeight = 0.0f; // one way drop links from ledges up to this height when a map loads (0 = off)
     float autoDropReach = 2.0f;  // how far beyond a ledge a drop may land
     float badLiquidCost = 4.0f; // lava, slime
+    float bodyHeight = 2.0f;      // CLEAR_BODY: height of the swept body
+    float bodyRadius = 0.4f;      // CLEAR_BODY: radius of the swept body
+    float bodyStepHeight = 0.75f; // CLEAR_BODY: obstacles up to this height are walked over
     float factionDangerCost = 3.0f;
     float randomPathMaxDistance = 1.0f;
     float roadCost = 0.75f;  // ANP roads, < 1 prefers them
@@ -375,6 +378,9 @@ private:
             {"iClientIdleTimeoutSec", std::ref(clientIdleTimeoutSec)},
             {"iCornerPoints", std::ref(cornerPoints)},
             {"iMaxClients", std::ref(maxClients)},
+            {"fBodyHeight", std::ref(bodyHeight)},
+            {"fBodyRadius", std::ref(bodyRadius)},
+            {"fBodyStepHeight", std::ref(bodyStepHeight)},
             {"iWorldCacheTiles", std::ref(worldCacheTiles)},
             {"iStatsIntervalSec", std::ref(statsIntervalSec)},
             {"iMaxPointPath", std::ref(maxPointPath)},

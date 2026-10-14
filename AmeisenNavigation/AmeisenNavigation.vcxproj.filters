@@ -29,12 +29,13 @@
     <ClInclude Include="src\NavSources\NavQueryFilter.hpp" />
     <ClInclude Include="src\NavSources\AvoidZoneStore.hpp" />
     <ClInclude Include="src\NavSources\OffMesh\OffMeshLinks.hpp" />
-    <ClInclude Include="src/World/StaticWorld.hpp" />
+    <ClInclude Include="src\World\StaticWorld.hpp" />
+    <ClInclude Include="src\NavSources\NavMeshLock.hpp" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\AmeisenNavigation.cpp" />
     <ClCompile Include="src\PathRefinement.cpp" />
     <ClCompile Include="src\Avoidance.cpp" />
-    <ClCompile Include="src/World/StaticWorld.cpp" />
+    <ClCompile Include="src\World\StaticWorld.cpp" />
   </ItemGroup>
 </Project>

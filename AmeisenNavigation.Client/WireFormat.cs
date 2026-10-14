@@ -199,6 +199,36 @@ namespace AmeisenNavigation.Client
         public ushort Reserved;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct SetObjectsHeader
+    {
+        public int MapId;
+        public int Count;
+        public int RemoveCount;
+        public int Reserved;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct ObjectData
+    {
+        public ulong Guid;
+        public uint DisplayId;
+        public uint Flags;
+        public Vector3 Position;
+        public float RotationX;
+        public float RotationY;
+        public float RotationZ;
+        public float RotationW;
+        public float Scale;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct SetObjectsResponse
+    {
+        public int Accepted;
+        public int PendingTiles;
+    }
+
     /// <summary>Wire struct sizes, compared with the server's by the integration test.</summary>
     internal static class WireSizes
     {
@@ -219,6 +249,9 @@ namespace AmeisenNavigation.Client
             (nameof(SurfacesRequestData), Marshal.SizeOf<SurfacesRequestData>(), 24),
             (nameof(SurfacesResponseHeader), Marshal.SizeOf<SurfacesResponseHeader>(), 8),
             (nameof(SurfaceData), Marshal.SizeOf<SurfaceData>(), 24),
+            (nameof(SetObjectsHeader), Marshal.SizeOf<SetObjectsHeader>(), 16),
+            (nameof(ObjectData), Marshal.SizeOf<ObjectData>(), 48),
+            (nameof(SetObjectsResponse), Marshal.SizeOf<SetObjectsResponse>(), 8),
         ];
     }
 }

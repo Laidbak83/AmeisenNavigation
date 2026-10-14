@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "AmeisenNavigation.hpp"
+#include "World/DynamicWorld.hpp"
 #include "AnTcpServer.hpp"
 #include "../../AmeisenNavigation.Pack/src/Version.hpp"
 #include "Config/Config.hpp"
@@ -29,6 +30,7 @@ class NavServer
 {
     AmeisenNavConfig Cfg;
     std::unique_ptr<AmeisenNavigation> Navigation;
+    std::unique_ptr<DynamicWorld> Dynamic; // after Navigation: destroyed (worker stopped) first
     std::unique_ptr<AnTcpServer> TcpServer;
     std::atomic<long long> LastRejectLog{0};
 
@@ -53,6 +55,7 @@ public:
 
     AnTcpServer& Server() noexcept { return *TcpServer; }
     AmeisenNavigation& Nav() noexcept { return *Navigation; }
+    DynamicWorld& Objects() noexcept { return *Dynamic; }
     const AmeisenNavConfig& Config() const noexcept { return Cfg; }
 
     /// Load the navmeshes listed in sPreloadMaps.
@@ -93,6 +96,7 @@ private:
     void HandleLineOfSight(ClientHandler* handler, AnTcpMessageType type, const void* data, int size);
     void HandleSurfaces(ClientHandler* handler, AnTcpMessageType type, const void* data, int size);
     void HandleSweep(ClientHandler* handler, AnTcpMessageType type, const void* data, int size);
+    void HandleSetObjects(ClientHandler* handler, AnTcpMessageType type, const void* data, int size);
 
     /// Path refinement options from request flags and an optional tuning trailer (nullptr = defaults).
     PathOptions MakePathOptions(int flags, const PathTuningData* tuning) const noexcept;

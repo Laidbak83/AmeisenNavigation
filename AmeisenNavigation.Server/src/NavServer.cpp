@@ -56,6 +56,7 @@ const char* MessageName(AnTcpMessageType type) noexcept
         case MessageType::LINE_OF_SIGHT: return "LineOfSight";
         case MessageType::SURFACES: return "Surfaces";
         case MessageType::SWEEP: return "Sweep";
+        case MessageType::SET_OBJECTS: return "SetObjects";
         default: return "Unknown";
     }
 }
@@ -92,6 +93,8 @@ NavServer::NavServer(const AmeisenNavConfig& config) : Cfg(config)
     settings.worldCacheTiles = static_cast<size_t>(std::max(1, Cfg.worldCacheTiles));
 
     Navigation = std::make_unique<AmeisenNavigation>(settings);
+    Dynamic = std::make_unique<DynamicWorld>(*Navigation,
+                                             settings.worldFolder.empty() ? settings.meshFolder : settings.worldFolder);
     TcpServer = std::make_unique<AnTcpServer>(Cfg.ip, static_cast<unsigned short>(Cfg.port));
     TcpServer->SetMaxClients(static_cast<size_t>(Cfg.maxClients));
     TcpServer->SetIdleTimeout(std::chrono::seconds(Cfg.clientIdleTimeoutSec));
@@ -144,6 +147,12 @@ void NavServer::ValidateConfig(AmeisenNavConfig& config, std::vector<std::string
     if (config.statsIntervalSec < 0)
     {
         errors.push_back("iStatsIntervalSec has to be >= 0 (0 = off)");
+    }
+
+    if (!(config.bodyRadius >= 0.0f && config.bodyRadius <= 5.0f) || !(config.bodyHeight >= 0.5f && config.bodyHeight <= 10.0f)
+        || !(config.bodyStepHeight >= 0.0f && config.bodyStepHeight < config.bodyHeight))
+    {
+        errors.push_back("fBodyRadius has to be 0-5, fBodyHeight 0.5-10, fBodyStepHeight below fBodyHeight");
     }
 
     if (config.worldCacheTiles < 1 || config.worldCacheTiles > 4096)
@@ -362,6 +371,7 @@ void NavServer::RegisterCallbacks()
     add(MessageType::LINE_OF_SIGHT, std::bind_front(&NavServer::HandleLineOfSight, this));
     add(MessageType::SURFACES, std::bind_front(&NavServer::HandleSurfaces, this));
     add(MessageType::SWEEP, std::bind_front(&NavServer::HandleSweep, this));
+    add(MessageType::SET_OBJECTS, std::bind_front(&NavServer::HandleSetObjects, this));
 }
 
 AnTcpError NavServer::Run() noexcept
@@ -488,6 +498,10 @@ PathOptions NavServer::MakePathOptions(int flags, const PathTuningData* tuning) 
     options.shortcut = HasFlag(flags, PathRequestFlags::SHORTCUT);
     options.roundCorners = HasFlag(flags, PathRequestFlags::ROUND_CORNERS);
     options.follow = HasFlag(flags, PathRequestFlags::FOLLOW);
+    options.clearBody = HasFlag(flags, PathRequestFlags::CLEAR_BODY);
+    options.bodyRadius = Cfg.bodyRadius;
+    options.bodyHeight = Cfg.bodyHeight;
+    options.bodyStepHeight = Cfg.bodyStepHeight;
     options.tuning.wallMargin = Cfg.wallMargin;
     options.tuning.cornerRadius = Cfg.cornerRadius;
     options.tuning.cornerPoints = Cfg.cornerPoints;
@@ -1161,4 +1175,48 @@ void NavServer::HandleSurfaces(ClientHandler* handler, AnTcpMessageType type, co
     }
 
     handler->SendData(type, response.data(), response.size());
+}
+
+void NavServer::HandleSetObjects(ClientHandler* handler, AnTcpMessageType type, const void* data, int size)
+{
+    SetObjectsHeader header{};
+    SetObjectsResponse response{-1, 0};
+
+    const bool valid = ReadRequest(data, size, header) && header.count >= 0 && header.removeCount >= 0
+                       && header.count + header.removeCount <= MAX_OBJECTS_PER_REQUEST
+                       && static_cast<size_t>(size) == sizeof(header) + header.count * sizeof(ObjectData)
+                                                          + header.removeCount * sizeof(unsigned long long);
+
+    if (!valid)
+    {
+        LogD("[", handler->GetId(), "] Invalid SET_OBJECTS request (", size, " bytes)");
+        handler->SendDataPtr(type, &response);
+        return;
+    }
+
+    const auto* bytes = static_cast<const unsigned char*>(data) + sizeof(header);
+    std::vector<WorldObject> objects(static_cast<size_t>(header.count));
+    std::vector<uint64_t> removed(static_cast<size_t>(header.removeCount));
+
+    for (auto& object : objects)
+    {
+        ObjectData in{};
+        std::memcpy(&in, bytes, sizeof(in));
+        bytes += sizeof(in);
+        object.guid = in.guid;
+        object.displayId = in.displayId;
+        object.blocking = (in.flags & OBJECT_BLOCKING) != 0;
+        object.position = in.position;
+        std::copy(std::begin(in.rotation), std::end(in.rotation), object.rotation);
+        object.scale = in.scale;
+    }
+
+    if (!removed.empty())
+    {
+        std::memcpy(removed.data(), bytes, removed.size() * sizeof(uint64_t));
+    }
+
+    response.accepted = Dynamic->SetObjects(header.mapId, objects, removed);
+    response.pendingTiles = static_cast<int>(Dynamic->PendingTiles());
+    handler->SendDataPtr(type, &response);
 }

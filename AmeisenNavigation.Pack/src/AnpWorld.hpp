@@ -257,15 +257,18 @@ public:
     int GetTileCount() const noexcept { return TileCount; }
     size_t GetStoredBytes() const noexcept { return StoredBytes; }
 
-    bool AddTile(const Tile& tile)
+    bool AddTile(const Tile& tile) { return AddEntry(Anp::TileEntryName(tile.adtX, tile.adtY), Serialize(tile), true); }
+
+    /// Add any entry (deflated outside the lock). tile = counts as a tile.
+    bool AddEntry(const std::string& name, const std::vector<unsigned char>& bytes, bool tile = false)
     {
-        const auto bytes = Serialize(tile);
-        const auto name = Anp::TileEntryName(tile.adtX, tile.adtY);
         const auto crc = static_cast<mz_uint32>(mz_crc32(MZ_CRC32_INIT, bytes.data(), bytes.size()));
         const mz_uint compFlags =
             tdefl_create_comp_flags_from_zip_params(MZ_DEFAULT_LEVEL, -MZ_DEFAULT_WINDOW_BITS, MZ_DEFAULT_STRATEGY);
         size_t compressedSize = 0;
-        void* compressed = tdefl_compress_mem_to_heap(bytes.data(), bytes.size(), &compressedSize, compFlags);
+        void* compressed = bytes.empty()
+                               ? nullptr
+                               : tdefl_compress_mem_to_heap(bytes.data(), bytes.size(), &compressedSize, compFlags);
         bool ok = false;
 
         {
@@ -275,10 +278,10 @@ public:
             {
                 if (compressed && compressedSize > 0 && compressedSize < bytes.size())
                 {
-                    ok = mz_zip_writer_add_mem_ex(&Zip, name.c_str(), compressed, compressedSize, nullptr, 0,
-                                                  static_cast<mz_uint>(MZ_DEFAULT_LEVEL) |
-                                                      static_cast<mz_uint>(MZ_ZIP_FLAG_COMPRESSED_DATA),
-                                                  static_cast<mz_uint64>(bytes.size()), crc);
+                    ok = mz_zip_writer_add_mem_ex(
+                        &Zip, name.c_str(), compressed, compressedSize, nullptr, 0,
+                        static_cast<mz_uint>(MZ_DEFAULT_LEVEL) | static_cast<mz_uint>(MZ_ZIP_FLAG_COMPRESSED_DATA),
+                        static_cast<mz_uint64>(bytes.size()), crc);
                     StoredBytes += ok ? compressedSize : 0;
                 }
                 else
@@ -287,7 +290,7 @@ public:
                     StoredBytes += ok ? bytes.size() : 0;
                 }
 
-                TileCount += ok ? 1 : 0;
+                TileCount += ok && tile ? 1 : 0;
             }
         }
 
@@ -295,11 +298,23 @@ public:
         return ok;
     }
 
+    /// Write "{outputDir}/{fileName}" (atomically via a temp file).
+    bool SaveAs(const std::filesystem::path& outputDir, const std::string& fileName)
+    {
+        const std::lock_guard lock(Mutex);
+        return SaveLocked(outputDir, fileName);
+    }
+
     /// Write "{outputDir}/{mapId:03}.anw" (atomically via a temp file).
     bool Save(const std::filesystem::path& outputDir)
     {
         const std::lock_guard lock(Mutex);
+        return SaveLocked(outputDir, FileName(MapId));
+    }
 
+private:
+    bool SaveLocked(const std::filesystem::path& outputDir, const std::string& fileName)
+    {
         if (!Valid || Finalized)
         {
             return false;
@@ -319,7 +334,7 @@ public:
         try
         {
             std::filesystem::create_directories(outputDir);
-            const auto finalPath = outputDir / FileName(MapId);
+            const auto finalPath = outputDir / fileName;
             auto tempPath = finalPath;
             tempPath += ".tmp";
 
@@ -346,7 +361,7 @@ public:
         }
         catch (const std::exception& e)
         {
-            LogE("Failed to save ", FileName(MapId), ": ", e.what());
+            LogE("Failed to save ", fileName, ": ", e.what());
             return false;
         }
     }
@@ -427,37 +442,48 @@ public:
         return Valid && mz_zip_reader_locate_file(&Zip, Anp::TileEntryName(adtX, adtY).c_str(), nullptr, 0) >= 0;
     }
 
+    /// An entry's bytes, nullopt if it is missing or bigger than maxSize.
+    std::optional<std::vector<unsigned char>> ReadEntry(const std::string& name, uint64_t maxSize)
+    {
+        const std::lock_guard lock(Mutex);
+
+        if (!Valid)
+        {
+            return std::nullopt;
+        }
+
+        const int index = mz_zip_reader_locate_file(&Zip, name.c_str(), nullptr, 0);
+        mz_zip_archive_file_stat stat{};
+
+        if (index < 0 || !mz_zip_reader_file_stat(&Zip, static_cast<mz_uint>(index), &stat)
+            || stat.m_uncomp_size > maxSize)
+        {
+            return std::nullopt;
+        }
+
+        std::vector<unsigned char> bytes(static_cast<size_t>(stat.m_uncomp_size));
+
+        if (!bytes.empty()
+            && !mz_zip_reader_extract_to_mem(&Zip, static_cast<mz_uint>(index), bytes.data(), bytes.size(), 0))
+        {
+            return std::nullopt;
+        }
+
+        return bytes;
+    }
+
     /// The tile of ADT (adtX, adtY), nullopt if there is none or it is corrupt.
     std::optional<Tile> ReadTile(int adtX, int adtY)
     {
-        std::vector<unsigned char> bytes;
+        const auto bytes = ReadEntry(Anp::TileEntryName(adtX, adtY),
+                                     sizeof(TileHeader) + MAX_TILE_VERTS * 6ull + MAX_TILE_TRIS * 17ull + 512);
 
+        if (!bytes)
         {
-            const std::lock_guard lock(Mutex);
-
-            if (!Valid)
-            {
-                return std::nullopt;
-            }
-
-            const int index = mz_zip_reader_locate_file(&Zip, Anp::TileEntryName(adtX, adtY).c_str(), nullptr, 0);
-            mz_zip_archive_file_stat stat{};
-
-            if (index < 0 || !mz_zip_reader_file_stat(&Zip, static_cast<mz_uint>(index), &stat) ||
-                stat.m_uncomp_size > sizeof(TileHeader) + MAX_TILE_VERTS * 6ull + MAX_TILE_TRIS * 17ull + 512)
-            {
-                return std::nullopt;
-            }
-
-            bytes.resize(static_cast<size_t>(stat.m_uncomp_size));
-
-            if (!mz_zip_reader_extract_to_mem(&Zip, static_cast<mz_uint>(index), bytes.data(), bytes.size(), 0))
-            {
-                return std::nullopt;
-            }
+            return std::nullopt;
         }
 
-        auto tile = Deserialize(bytes.data(), bytes.size());
+        auto tile = Deserialize(bytes->data(), bytes->size());
         return tile && tile->adtX == adtX && tile->adtY == adtY ? tile : std::nullopt;
     }
 };

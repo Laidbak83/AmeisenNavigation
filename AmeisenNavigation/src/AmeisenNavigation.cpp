@@ -215,6 +215,11 @@ bool AmeisenNavigation::GetPath(size_t clientId, int mapId, const Vector3& start
     endPosition.CopyToRDCoords(target);
     RefineAll(ctx.query, ctx.filter, path, flags, target, options, true);
 
+    if (options && options->clearBody)
+    {
+        ClearBody(ctx.query, ctx.filter, mapId, path, flags, *options);
+    }
+
     if (pointFlags)
     {
         std::copy(flags, flags + path.pointCount, pointFlags);
@@ -319,6 +324,11 @@ bool AmeisenNavigation::GetRandomPath(size_t clientId, int mapId, const Vector3&
         second.shortcut = false;
         second.tuning.stopDistance = 0.0f;
         RefineAll(ctx.query, ctx.filter, path, flags, target, &second, false);
+    }
+
+    if (options && options->clearBody)
+    {
+        ClearBody(ctx.query, ctx.filter, mapId, path, flags, *options);
     }
 
     if (pointFlags)
@@ -1035,6 +1045,7 @@ AmeisenNavigation::QueryContext AmeisenNavigation::GetQueryContext(size_t client
         return {};
     }
 
+    ctx.meshLock = NavMeshLock::Shared(pool->Lock());
     ctx.lease = pool->Acquire();
 
     if (!ctx.lease)
@@ -1196,4 +1207,96 @@ bool AmeisenNavigation::SweepBody(int mapId, const Vector3& start, const Vector3
 {
     World::StaticWorld* world = Worlds.Get(mapId);
     return world && world->Sweep(start, end, radius, height, stepHeight, ignore, hit);
+}
+
+int AmeisenNavigation::ReplaceTiles(int mapId, const std::vector<std::vector<unsigned char>>& tiles)
+{
+    NavMeshQueryPool* pool = GetQueryPool(mapId);
+    dtNavMesh* navMesh = pool ? NavSource->Get(mapId) : nullptr;
+
+    if (!navMesh)
+    {
+        return 0;
+    }
+
+    // File links are read before taking the lock (the file can be slow, requests wait while it is held).
+    std::vector<OffMeshLink> fileLinks;
+
+    if (!Settings.offMeshFile.empty())
+    {
+        unsigned short groundFlags = NAV_GROUND;
+
+        if (!Settings.useAnp)
+        {
+            groundFlags = Settings.mmapFormat == MmapFormat::SF548 ? static_cast<unsigned short>(NavArea548::GROUND)
+                                                                   : static_cast<unsigned short>(NavFlag335a::GROUND);
+        }
+
+        fileLinks = OffMeshLinks::ReadFile(Settings.offMeshFile, mapId, groundFlags);
+    }
+
+    struct Exclusive
+    {
+        NavMeshLock& lock;
+        explicit Exclusive(NavMeshLock& l) : lock(l) { lock.Lock(); }
+        ~Exclusive() { lock.Unlock(); }
+    } exclusive(pool->Lock());
+
+    int replaced = 0;
+
+    for (const auto& data : tiles)
+    {
+        if (data.empty() || !ValidateTileData(data.data(), data.size()))
+        {
+            continue;
+        }
+
+        dtMeshHeader header;
+        std::memcpy(&header, data.data(), sizeof(header));
+
+        if (const dtTileRef existing = navMesh->getTileRefAt(header.x, header.y, header.layer); existing)
+        {
+            navMesh->removeTile(existing, nullptr, nullptr);
+        }
+
+        auto* copy = static_cast<unsigned char*>(dtAlloc(static_cast<int>(data.size()), DT_ALLOC_PERM));
+
+        if (!copy)
+        {
+            continue;
+        }
+
+        std::memcpy(copy, data.data(), data.size());
+
+        if (dtStatusFailed(navMesh->addTile(copy, static_cast<int>(data.size()), DT_TILE_FREE_DATA, 0, nullptr)))
+        {
+            dtFree(copy);
+            LogE("Map ", mapId, ": failed to add rebuilt tile ", header.x, ",", header.y);
+            continue;
+        }
+
+        replaced++;
+
+        // Links starting or ending in the new tile (the neighbours still have theirs).
+        std::vector<const OffMeshLink*> links;
+
+        for (const OffMeshLink& link : fileLinks)
+        {
+            int sx = 0, sy = 0, ex = 0, ey = 0;
+            navMesh->calcTileLoc(link.start, &sx, &sy);
+            navMesh->calcTileLoc(link.end, &ex, &ey);
+
+            if ((sx == header.x && sy == header.y) || (ex == header.x && ey == header.y))
+            {
+                links.push_back(&link);
+            }
+        }
+
+        if (!links.empty())
+        {
+            TileRebuilder::Rebuild(*navMesh, navMesh->getTileAt(header.x, header.y, header.layer), links);
+        }
+    }
+
+    return replaced;
 }

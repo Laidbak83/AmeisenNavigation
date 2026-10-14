@@ -31,6 +31,9 @@ constexpr float PILLAR_Z = -450.0f;
 constexpr uint32_t WALL_SOURCE = (1u << 28) | 77; // AnpWorld::MakeSource(WMO, 77)
 constexpr uint32_t PLATFORM_SOURCE = (1u << 28) | 78;
 constexpr uint32_t PILLAR_SOURCE = (2u << 28) | 99; // doodad
+/// gameobjects.ano: display 777 is a 120 yard long, 4 yard high double wall along the model's x axis (a gate).
+constexpr uint32_t GATE_DISPLAY = 777;
+constexpr float GATE_HALF_LENGTH = 60.0f;
 
 /// RD -> WoW
 inline Vector3 Wow(float rdX, float rdY, float rdZ) { return Vector3(rdZ, rdX, rdY); }
@@ -153,7 +156,15 @@ inline const Result& Get()
             }
         }
 
-        WriteWorld(geometry, {{32, 32}, {33, 32}}, chunkAreas, MAP_ID, result.meshDir);
+        const TileBuildConfig config = FastBuildConfig();
+        WriteWorld(geometry, {{32, 32}, {33, 32}}, chunkAreas, MAP_ID, result.meshDir, nullptr, &config, &params, &water,
+                   &roads, &cities, &factions);
+
+        // Model space in RD order (RD x = model y, RD z = model x): walls in the RD x = 0 plane along RD z.
+        Structure gate;
+        AddWallX(gate, -0.2f, -GATE_HALF_LENGTH, GATE_HALF_LENGTH, -0.5f, 4.0f);
+        AddWallX(gate, 0.2f, -GATE_HALF_LENGTH, GATE_HALF_LENGTH, -0.5f, 4.0f);
+        ObjectModels::Write(result.meshDir, {{GATE_DISPLAY, 0u}}, {ObjectModels::ToTile(gate)});
     });
 
     return result;

@@ -5,6 +5,8 @@
 #include <list>
 #include <memory>
 #include <mutex>
+#include <optional>
+#include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -49,6 +51,20 @@ struct Surface
     bool standable = false; // walkable ground (not too steep, not liquid)
     bool liquid = false;
 };
+
+/// Collision mesh of an object added at runtime (game object), in RD coordinates.
+struct DynamicMesh
+{
+    uint64_t guid = 0;
+    uint32_t source = 0; // AnpWorld::MakeSource(GAME_OBJECT, displayId)
+    std::vector<float> verts;
+    std::vector<uint32_t> indices;
+    std::vector<uint8_t> areas;
+    float bmin[3]{};
+    float bmax[3]{};
+};
+
+using DynamicMeshes = std::vector<std::shared_ptr<const DynamicMesh>>;
 
 /// One ADT of the static world with a bounding volume hierarchy over its triangles (RD coordinates).
 class WorldTile
@@ -124,6 +140,20 @@ public:
 
     size_t CachedTiles() const;
 
+    /// Objects added at runtime: every query sees them too (replaced as a whole, copy on write).
+    void SetDynamicMeshes(std::shared_ptr<const DynamicMeshes> meshes);
+    std::shared_ptr<const DynamicMeshes> GetDynamicMeshes() const;
+
+    /// Raw access for rebuilding navmesh tiles (not cached).
+    std::optional<AnpWorld::Tile> ReadRawTile(int adtX, int adtY)
+    {
+        return Reader ? Reader->ReadTile(adtX, adtY) : std::nullopt;
+    }
+    std::optional<std::vector<unsigned char>> ReadEntry(const std::string& name, uint64_t maxSize)
+    {
+        return Reader ? Reader->ReadEntry(name, maxSize) : std::nullopt;
+    }
+
     /// Longest segment Raycast and Sweep accept (yards).
     static constexpr float MAX_SEGMENT_LENGTH = 1000.0f;
 
@@ -134,6 +164,7 @@ private:
     std::list<std::pair<int, std::shared_ptr<const WorldTile>>> Lru; // most recent first
     std::unordered_map<int, decltype(Lru)::iterator> Index;
     std::unordered_map<int, bool> Missing; // ADTs without a tile
+    std::shared_ptr<const DynamicMeshes> Dynamic;
 
     /// Tiles a segment's bounding box touches (WoW coordinates), false if none exists.
     bool TilesAlong(const Vector3& a, const Vector3& b, float margin,
