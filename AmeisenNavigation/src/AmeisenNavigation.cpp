@@ -118,7 +118,7 @@ bool AmeisenNavigation::PreloadMap(int mapId) noexcept
 }
 
 bool AmeisenNavigation::GetPath(size_t clientId, int mapId, const Vector3& startPosition, const Vector3& endPosition,
-                                Path& path, bool* partial)
+                                Path& path, bool* partial, const PathOptions* options)
 {
     path.Clear();
     const auto ctx = GetQueryContext(clientId, mapId);
@@ -130,10 +130,23 @@ bool AmeisenNavigation::GetPath(size_t clientId, int mapId, const Vector3& start
 
     LogD("[", clientId, "] GetPath (", mapId, ") ", startPosition, " -> ", endPosition);
 
-    if (!CalculateNormalPath(ctx.query, ctx.filter, *ctx.client, startPosition, endPosition, path, nullptr,
-                             partial))
+    const bool found = options && options->follow
+                           ? CalculateFollowPath(ctx.query, ctx.filter, *ctx.client, mapId, startPosition, endPosition,
+                                                 path, partial)
+                           : CalculateNormalPath(ctx.query, ctx.filter, *ctx.client, startPosition, endPosition, path,
+                                                 nullptr, partial);
+
+    if (!found)
     {
         return false;
+    }
+
+    if (options)
+    {
+        Vector3 target;
+        endPosition.CopyToRDCoords(target);
+        Path scratch(path.maxSize);
+        RefinePath(ctx.query, ctx.filter, path, target, *options, true, scratch);
     }
 
     path.ToWowCoords();
@@ -141,7 +154,8 @@ bool AmeisenNavigation::GetPath(size_t clientId, int mapId, const Vector3& start
 }
 
 bool AmeisenNavigation::GetRandomPath(size_t clientId, int mapId, const Vector3& startPosition,
-                                      const Vector3& endPosition, Path& path, float maxRandomDistance, bool* partial)
+                                      const Vector3& endPosition, Path& path, float maxRandomDistance, bool* partial,
+                                      const PathOptions* options)
 {
     path.Clear();
     const auto ctx = GetQueryContext(clientId, mapId);
@@ -161,6 +175,26 @@ bool AmeisenNavigation::GetRandomPath(size_t clientId, int mapId, const Vector3&
                              partial))
     {
         return false;
+    }
+
+    // Shortcut and stop distance before the jitter (they need the plain corners and their refs), the rest after.
+    Path scratch(options ? path.maxSize : 1);
+    Vector3 target;
+    endPosition.CopyToRDCoords(target);
+
+    if (options && (options->shortcut || options->tuning.stopDistance > 0.0f))
+    {
+        PathOptions first;
+        first.shortcut = options->shortcut;
+        first.tuning.stopDistance = options->tuning.stopDistance;
+        RefinePath(ctx.query, ctx.filter, path, target, first, true, scratch);
+
+        // The corner refs belong to the plain path.
+        for (int i = 0; i < path.pointCount; ++i)
+        {
+            PolyPosition snapped;
+            cornerRefs[i] = FindNearestPoly(ctx.query, ctx.filter, path[i], snapped) ? snapped.poly : 0;
+        }
     }
 
     if (maxRandomDistance > 0.0f)
@@ -198,6 +232,14 @@ bool AmeisenNavigation::GetRandomPath(size_t clientId, int mapId, const Vector3&
                 previous = original;
             }
         }
+    }
+
+    if (options && (options->avoidWalls || options->roundCorners))
+    {
+        PathOptions second = *options;
+        second.shortcut = false;
+        second.tuning.stopDistance = 0.0f;
+        RefinePath(ctx.query, ctx.filter, path, target, second, false, scratch);
     }
 
     path.ToWowCoords();
@@ -404,7 +446,7 @@ bool AmeisenNavigation::CastMovementRay(size_t clientId, int mapId, const Vector
 }
 
 bool AmeisenNavigation::Raycast(const dtNavMeshQuery* query, const dtQueryFilter* filter, const PolyPosition& start,
-                                const Vector3& rdEnd, dtRaycastHit& hit) noexcept
+                                const Vector3& rdEnd, dtRaycastHit& hit, dtPolyRef* visited, int maxVisited) noexcept
 {
     // Polygons touching the start: the start's own one plus those around it whose surface contains it.
     constexpr int MAX_START_POLYS = 16;
@@ -436,8 +478,8 @@ bool AmeisenNavigation::Raycast(const dtNavMeshQuery* query, const dtQueryFilter
     {
         // dtRaycastHit has no constructor, path/maxPath MUST be initialized or Detour writes through garbage.
         dtRaycastHit current{};
-        current.path = nullptr;
-        current.maxPath = 0;
+        current.path = visited;
+        current.maxPath = visited ? maxVisited : 0;
 
         if (dtStatusFailed(query->raycast(candidates[i], start.pos, rdEnd, filter, 0, &current)))
         {
@@ -543,7 +585,7 @@ bool AmeisenNavigation::PostProcessMoveAlongSurface(size_t clientId, int mapId, 
 
 bool AmeisenNavigation::ExplorePolygon(size_t clientId, int mapId, const Vector3& startPosition,
                                        std::span<const Vector3> polygon, float spacing, Path& path,
-                                       ExploreResult* result)
+                                       ExploreResult* result, const PathOptions* options)
 {
     path.Clear();
     ExploreResult local;
@@ -702,6 +744,13 @@ bool AmeisenNavigation::ExplorePolygon(size_t clientId, int mapId, const Vector3
 
         res.reached++;
         current = target;
+    }
+
+    if (options && (options->avoidWalls || options->roundCorners) && path.pointCount > 2)
+    {
+        path.ToRdCoords();
+        RefinePath(ctx.query, ctx.filter, path, Vector3{}, *options, false, segment);
+        path.ToWowCoords();
     }
 
     LogD("[", clientId, "] ExplorePolygon (", mapId, ") ", polygon.size(), " vertices, spacing ", spacing, ": ",

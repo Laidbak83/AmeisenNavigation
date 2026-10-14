@@ -10,7 +10,8 @@
 /// These must stay in sync with AmeisenNavigation.Client/WireFormat.cs (little endian, natural alignment).
 ///
 /// Every request gets exactly one response with the same message type:
-///   PATH / RANDOM_PATH      -> Vector3[] (a single zero vector on failure)
+///   PATH / RANDOM_PATH      -> Vector3[] (a single zero vector on failure), request: PathRequestData
+///                              [+ PathTuningData]
 ///   MOVE_ALONG_SURFACE      -> Vector3   (zero on failure)
 ///   RANDOM_POINT(_AROUND)   -> Vector3   (zero on failure)
 ///   CAST_RAY                -> Vector3   (end position if the ray is clear, zero if blocked/failed)
@@ -52,12 +53,17 @@ enum class PathRequestFlags : int
     VALIDATE_CPOP = 1 << 3,      // Validate smoothed path using closestPointOnPoly
     VALIDATE_MAS = 1 << 4,       // Validate smoothed path using moveAlongSurface
     REQUIRE_COMPLETE = 1 << 5,   // Fail instead of returning a partial path when the end is unreachable
+    AVOID_WALLS = 1 << 6,        // Keep corners fWallMargin away from the walls they bend around
+    SHORTCUT = 1 << 7,           // Skip corners wherever the navmesh allows a straight line
+    ROUND_CORNERS = 1 << 8,      // Replace corners by arcs (fCornerRadius, iCornerPoints) around them
+    FOLLOW = 1 << 9,             // PATH only: reuse the corridor of the connection's previous path
 };
 
 /// Bumped whenever requests/responses are added or extended (reported by GET_CONFIG).
 ///   1: PATH ... CAST_RAY_EX
 ///   2: EXPLORE_POLY, PathRequestFlags::REQUIRE_COMPLETE, GET_CONFIG trailer
-constexpr int PROTOCOL_VERSION = 2;
+///   3: AVOID_WALLS, SHORTCUT, ROUND_CORNERS, FOLLOW, PathTuningData trailer
+constexpr int PROTOCOL_VERSION = 3;
 
 constexpr bool HasFlag(int flags, PathRequestFlags flag) noexcept { return (flags & static_cast<int>(flag)) != 0; }
 
@@ -67,6 +73,16 @@ struct PathRequestData
     int flags;
     Vector3 start;
     Vector3 end;
+};
+
+/// Optional trailer of PATH / RANDOM_PATH (after PathRequestData) and EXPLORE_POLY (after the polygon points).
+/// Negative or non-finite values use the server's defaults (fWallMargin, fCornerRadius, iCornerPoints).
+struct PathTuningData
+{
+    float wallMargin;
+    float cornerRadius;
+    int cornerPoints;
+    float stopDistance; // end this far before the target, at a point that sees it (0 = at the target)
 };
 
 struct MoveRequestData
@@ -144,6 +160,7 @@ struct ConfigureFilterHeader
 
 // Layout checks, the C# client relies on these exact sizes/offsets.
 static_assert(sizeof(PathRequestData) == 32);
+static_assert(sizeof(PathTuningData) == 16 && offsetof(PathTuningData, stopDistance) == 12);
 static_assert(sizeof(MoveRequestData) == 28);
 static_assert(sizeof(CastRayData) == 28);
 static_assert(sizeof(CastRayExResponse) == 32);

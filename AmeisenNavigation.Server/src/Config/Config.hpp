@@ -26,6 +26,8 @@ struct AmeisenNavConfig
     bool debugLogging = false;
     bool useAnpFileFormat = false;
     float catmullRomSplineAlpha = 0.5f;
+    float cornerRadius = 2.0f; // ROUND_CORNERS arc radius
+    float wallMargin = 1.0f;   // AVOID_WALLS distance
     float badLiquidCost = 4.0f; // lava, slime
     float factionDangerCost = 3.0f;
     float randomPathMaxDistance = 1.0f;
@@ -33,6 +35,7 @@ struct AmeisenNavConfig
     float waterCost = 1.6f;  // water, ocean
     int bezierCurvePoints = 8;
     int catmullRomSplinePoints = 4;
+    int cornerPoints = 4; // ROUND_CORNERS points per arc
     int clientIdleTimeoutSec = 0; // disconnect silent clients after this many seconds, 0 = never
     int maxClients = 1024;        // simultaneous connections (one thread each), 0 = unlimited
     int statsIntervalSec = 300;   // log request counts/latencies this often (only if there were requests), 0 = off
@@ -349,13 +352,16 @@ private:
             {"bUseAnpFileFormat", std::ref(useAnpFileFormat)},
             {"fBadLiquidCost", std::ref(badLiquidCost)},
             {"fCatmullRomSplineAlpha", std::ref(catmullRomSplineAlpha)},
+            {"fCornerRadius", std::ref(cornerRadius)},
             {"fFactionDangerCost", std::ref(factionDangerCost)},
             {"fRandomPathMaxDistance", std::ref(randomPathMaxDistance)},
             {"fRoadCost", std::ref(roadCost)},
+            {"fWallMargin", std::ref(wallMargin)},
             {"fWaterCost", std::ref(waterCost)},
             {"iBezierCurvePoints", std::ref(bezierCurvePoints)},
             {"iCatmullRomSplinePoints", std::ref(catmullRomSplinePoints)},
             {"iClientIdleTimeoutSec", std::ref(clientIdleTimeoutSec)},
+            {"iCornerPoints", std::ref(cornerPoints)},
             {"iMaxClients", std::ref(maxClients)},
             {"iStatsIntervalSec", std::ref(statsIntervalSec)},
             {"iMaxPointPath", std::ref(maxPointPath)},

@@ -297,6 +297,62 @@ TEST_CASE(Server_AllSmoothingAndValidationFlags)
     }
 }
 
+TEST_CASE(Server_RefinementFlagsAndTuningTrailer)
+{
+    ServerFixture server;
+    RawClient client(server.Port());
+    REQUIRE(client.Connected());
+
+    const int fluid = static_cast<int>(PathRequestFlags::AVOID_WALLS) | static_cast<int>(PathRequestFlags::SHORTCUT)
+                      | static_cast<int>(PathRequestFlags::ROUND_CORNERS);
+
+    struct WithTuning
+    {
+        PathRequestData request;
+        PathTuningData tuning;
+    };
+
+    static_assert(sizeof(WithTuning) == sizeof(PathRequestData) + sizeof(PathTuningData));
+
+    for (const MessageType type : {MessageType::PATH, MessageType::RANDOM_PATH})
+    {
+        // Flags only: server defaults.
+        auto response = client.Request(type, MakePathRequest(fluid));
+        REQUIRE(response.has_value());
+        const auto plain = AsVectors(*response);
+        CHECK(plain.size() > 3);
+
+        // Trailer with a stop distance, defaults for the rest.
+        const WithTuning tuned{MakePathRequest(fluid), PathTuningData{-1.0f, std::nanf(""), -1, 10.0f}};
+        response = client.Request(type, tuned);
+        REQUIRE(response.has_value());
+        const auto points = AsVectors(*response);
+        REQUIRE(points.size() >= 2);
+        CHECK(points.back().DistanceTo(tuned.request.end) <= 10.1f);
+        CHECK(points.back().DistanceTo(tuned.request.end) > 8.0f);
+
+        for (const auto& p : points)
+        {
+            CHECK(p.IsFinite());
+        }
+    }
+
+    // Follow: two requests along the way keep the same corners.
+    const int follow = static_cast<int>(PathRequestFlags::FOLLOW);
+    auto first = client.Request(MessageType::PATH, MakePathRequest(follow));
+    REQUIRE(first.has_value());
+    const auto firstPoints = AsVectors(*first);
+    REQUIRE(firstPoints.size() >= 3);
+
+    PathRequestData next = MakePathRequest(follow);
+    next.start = firstPoints[0] + (firstPoints[1] - firstPoints[0]) * (3.0f / firstPoints[0].DistanceTo(firstPoints[1]));
+    auto second = client.Request(MessageType::PATH, next);
+    REQUIRE(second.has_value());
+    const auto secondPoints = AsVectors(*second);
+    REQUIRE(secondPoints.size() == firstPoints.size());
+    CHECK(secondPoints[1].DistanceTo(firstPoints[1]) < 0.01f);
+}
+
 TEST_CASE(Server_CastRayAndCastRayEx)
 {
     ServerFixture server;

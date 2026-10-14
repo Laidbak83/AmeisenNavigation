@@ -112,6 +112,37 @@ struct AmeisenNavigationSettings
     size_t maxIdleQueriesPerMap = 0; // dtNavMeshQuery objects kept per map between requests, 0 = automatic
 };
 
+/// Per request path tuning (PATH, RANDOM_PATH, EXPLORE_POLY), see PathOptions.
+struct PathTuning
+{
+    float wallMargin = 1.0f;   // how far corners are moved away from the walls they bend around
+    float cornerRadius = 2.0f; // radius of the arcs replacing corners
+    int cornerPoints = 4;      // points per arc
+    float stopDistance = 0.0f; // end the path this far before the target (0 = at the target)
+};
+
+/// Path post-processing on the navmesh. Every changed segment is checked with a navmesh raycast and a step that
+/// fails is skipped, so the result is never worse than the plain path.
+struct PathOptions
+{
+    bool shortcut = false;     // skip corners wherever a straight line stays on the navmesh
+    bool avoidWalls = false;   // keep corners tuning.wallMargin away from the walls they bend around
+    bool roundCorners = false; // replace corners by arcs
+    bool follow = false;       // reuse the corridor of the client's previous path on this map (GetPath only)
+    PathTuning tuning{};
+};
+
+/// Limits for PathTuning values (clamped).
+constexpr float MAX_WALL_MARGIN = 10.0f;
+constexpr float MAX_CORNER_RADIUS = 25.0f;
+constexpr int MAX_CORNER_POINTS = 16;
+constexpr float MAX_STOP_DISTANCE = 200.0f;
+
+/// Follow requests reuse the previous corridor while the start stays this close to it and the target this close to
+/// the previous target, otherwise the path is searched again.
+constexpr float FOLLOW_MAX_START_DEVIATION = 3.0f;
+constexpr float FOLLOW_MAX_TARGET_MOVE = 10.0f;
+
 /// Details of an ExplorePolygon run.
 struct ExploreResult
 {
@@ -169,18 +200,21 @@ public:
     /// Find a path from start to end. Returns true on success, populates path (WoW coordinates).
     /// If the end isn't reachable the path leads as close as possible and *partial is set to true.
     bool GetPath(size_t clientId, int mapId, const Vector3& startPosition, const Vector3& endPosition, Path& path,
-                 bool* partial = nullptr);
+                 bool* partial = nullptr, const PathOptions* options = nullptr);
 
     /// Find a path with randomized intermediate waypoints (within maxRandomDistance).
     bool GetRandomPath(size_t clientId, int mapId, const Vector3& startPosition, const Vector3& endPosition,
-                       Path& path, float maxRandomDistance, bool* partial = nullptr);
+                       Path& path, float maxRandomDistance, bool* partial = nullptr,
+                       const PathOptions* options = nullptr);
 
     /// Route that explores an area: waypoints on a hexagonal grid (`spacing` apart) inside the polygon
     /// (WoW x/y outline, the outline's z picks the floor), snapped to the navmesh, visited in a short tour
     /// from the start and connected by navmesh paths. Unreachable waypoints are skipped, the route is cut
     /// at the path's capacity. Returns false if no waypoint could be reached.
+    /// Options: shortcut, stopDistance and follow don't apply (the route has to visit its waypoints).
     bool ExplorePolygon(size_t clientId, int mapId, const Vector3& startPosition, std::span<const Vector3> polygon,
-                        float spacing, Path& path, ExploreResult* result = nullptr);
+                        float spacing, Path& path, ExploreResult* result = nullptr,
+                        const PathOptions* options = nullptr);
 
     /// Move from start towards end along the navmesh surface (small deltas), result is snapped to the surface.
     bool MoveAlongSurface(size_t clientId, int mapId, const Vector3& startPosition, const Vector3& endPosition,
@@ -255,8 +289,10 @@ private:
     /// Raycast along the navmesh from start to rdEnd. A start on a polygon edge or corner touches several polygons,
     /// Detour casts from one of them only and may leave it through a border edge at t = 0: the ray is cast from
     /// every polygon touching the start and the furthest result wins. Returns false if no ray could be cast.
+    /// visited (optional) receives the polygons of the winning ray if it is clear (hit.path/pathCount).
     static bool Raycast(const dtNavMeshQuery* query, const dtQueryFilter* filter, const PolyPosition& start,
-                        const Vector3& rdEnd, dtRaycastHit& hit) noexcept;
+                        const Vector3& rdEnd, dtRaycastHit& hit, dtPolyRef* visited = nullptr,
+                        int maxVisited = 0) noexcept;
 
     /// moveAlongSurface from `position` towards rdTarget. On success `position` is the result, projected onto the
     /// surface (moveAlongSurface doesn't fix the height), and the polygon holding it.
@@ -296,4 +332,27 @@ private:
     bool CalculateNormalPath(dtNavMeshQuery* query, const dtQueryFilter* filter, AmeisenNavClient& client,
                              const PolyPosition& start, const PolyPosition& end, Path& path,
                              dtPolyRef* straightPathRefs = nullptr, bool* partial = nullptr) noexcept;
+
+    // ── Path refinement (PathRefinement.cpp), paths in RD coordinates ──
+
+    /// Path along the client's follow corridor (reused if the start and target moved little, searched otherwise).
+    bool CalculateFollowPath(dtNavMeshQuery* query, const dtQueryFilter* filter, AmeisenNavClient& client, int mapId,
+                             const Vector3& startPosition, const Vector3& endPosition, Path& path,
+                             bool* partial) noexcept;
+
+    /// Apply the options to a path. target (RD) is the requested end, used for the stop distance.
+    void RefinePath(dtNavMeshQuery* query, const dtQueryFilter* filter, Path& path, const Vector3& target,
+                    const PathOptions& options, bool allowShortcut, Path& scratch) const noexcept;
+
+    /// True if the navmesh surface leads straight from a to b (raycast along it reaching b's height).
+    static bool SegmentClear(const dtNavMeshQuery* query, const dtQueryFilter* filter, const Vector3& a,
+                             const Vector3& b) noexcept;
+
+    static void ShortcutPath(const dtNavMeshQuery* query, const dtQueryFilter* filter, Path& path) noexcept;
+    static void CutAtStopDistance(const dtNavMeshQuery* query, const dtQueryFilter* filter, Path& path,
+                                  const Vector3& target, float stopDistance) noexcept;
+    static void PushCornersFromWalls(const dtNavMeshQuery* query, const dtQueryFilter* filter, Path& path,
+                                     float margin) noexcept;
+    static void RoundCorners(const dtNavMeshQuery* query, const dtQueryFilter* filter, Path& path, float radius,
+                             int points, Path& scratch) noexcept;
 };

@@ -189,6 +189,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="src\AmeisenNavigation.cpp" />
+    <ClCompile Include="src\PathRefinement.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\AmeisenNavigation.hpp" />

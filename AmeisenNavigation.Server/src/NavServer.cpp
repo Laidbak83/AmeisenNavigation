@@ -196,6 +196,26 @@ void NavServer::ValidateConfig(AmeisenNavConfig& config, std::vector<std::string
         }
     }
 
+    const std::pair<const char*, float*> distances[]{{"fWallMargin", &config.wallMargin},
+                                                      {"fCornerRadius", &config.cornerRadius}};
+
+    for (const auto& distance : distances)
+    {
+        const float limit = distance.second == &config.wallMargin ? MAX_WALL_MARGIN : MAX_CORNER_RADIUS;
+
+        if (*distance.second < 0.0f || *distance.second > limit)
+        {
+            warnings.push_back(std::format("{} has to be within [0, {}], clamping", distance.first, limit));
+            *distance.second = std::clamp(*distance.second, 0.0f, limit);
+        }
+    }
+
+    if (config.cornerPoints < 1 || config.cornerPoints > MAX_CORNER_POINTS)
+    {
+        warnings.push_back(std::format("iCornerPoints has to be within [1, {}], clamping", MAX_CORNER_POINTS));
+        config.cornerPoints = std::clamp(config.cornerPoints, 1, MAX_CORNER_POINTS);
+    }
+
     if (config.randomPathMaxDistance < 0.0f)
     {
         warnings.push_back("fRandomPathMaxDistance negative, clamping to 0");
@@ -403,6 +423,39 @@ void NavServer::OnClientDisconnect(ClientHandler* handler)
     LogI("Client disconnected: ", handler->GetIpAddress(), ":", handler->GetPort(), " (id ", handler->GetId(), ")");
 }
 
+PathOptions NavServer::MakePathOptions(int flags, const PathTuningData* tuning) const noexcept
+{
+    PathOptions options;
+    options.avoidWalls = HasFlag(flags, PathRequestFlags::AVOID_WALLS);
+    options.shortcut = HasFlag(flags, PathRequestFlags::SHORTCUT);
+    options.roundCorners = HasFlag(flags, PathRequestFlags::ROUND_CORNERS);
+    options.follow = HasFlag(flags, PathRequestFlags::FOLLOW);
+    options.tuning.wallMargin = Cfg.wallMargin;
+    options.tuning.cornerRadius = Cfg.cornerRadius;
+    options.tuning.cornerPoints = Cfg.cornerPoints;
+
+    if (tuning)
+    {
+        const auto use = [](float value, float& field, float limit) {
+            if (std::isfinite(value) && value >= 0.0f)
+            {
+                field = std::min(value, limit);
+            }
+        };
+
+        use(tuning->wallMargin, options.tuning.wallMargin, MAX_WALL_MARGIN);
+        use(tuning->cornerRadius, options.tuning.cornerRadius, MAX_CORNER_RADIUS);
+        use(tuning->stopDistance, options.tuning.stopDistance, MAX_STOP_DISTANCE);
+
+        if (tuning->cornerPoints >= 0)
+        {
+            options.tuning.cornerPoints = std::clamp(tuning->cornerPoints, 1, MAX_CORNER_POINTS);
+        }
+    }
+
+    return options;
+}
+
 Path* NavServer::ApplyPathFlags(size_t clientId, int mapId, int flags, PathType pathType, Path& path, Path& scratch)
 {
     Path* current = &path;
@@ -476,11 +529,23 @@ void NavServer::HandlePath(ClientHandler* handler, AnTcpMessageType type, const 
     Path& path = client->GetPathBuffer();
     Path& scratch = client->GetScratchPathBuffer();
 
+    PathTuningData tuning{};
+    const bool hasTuning = static_cast<size_t>(size) >= sizeof(request) + sizeof(tuning);
+
+    if (hasTuning)
+    {
+        std::memcpy(&tuning, static_cast<const char*>(data) + sizeof(request), sizeof(tuning));
+    }
+
+    PathOptions options = MakePathOptions(request.flags, hasTuning ? &tuning : nullptr);
+    options.follow = options.follow && pathType == PathType::STRAIGHT;
+
     bool partial = false;
     bool ok = pathType == PathType::RANDOM
                   ? Navigation->GetRandomPath(handler->GetId(), request.mapId, request.start, request.end, path,
-                                              Cfg.randomPathMaxDistance, &partial)
-                  : Navigation->GetPath(handler->GetId(), request.mapId, request.start, request.end, path, &partial);
+                                              Cfg.randomPathMaxDistance, &partial, &options)
+                  : Navigation->GetPath(handler->GetId(), request.mapId, request.start, request.end, path, &partial,
+                                        &options);
 
     if (ok && partial && HasFlag(request.flags, PathRequestFlags::REQUIRE_COMPLETE))
     {
@@ -740,12 +805,23 @@ void NavServer::HandleExplorePoly(ClientHandler* handler, AnTcpMessageType type,
     std::vector<Vector3> polygon(static_cast<size_t>(count));
     std::memcpy(polygon.data(), static_cast<const char*>(data) + sizeof(request), polygon.size() * sizeof(Vector3));
 
+    const size_t tuningOffset = sizeof(request) + polygon.size() * sizeof(Vector3);
+    PathTuningData tuning{};
+    const bool hasTuning = static_cast<size_t>(size) >= tuningOffset + sizeof(tuning);
+
+    if (hasTuning)
+    {
+        std::memcpy(&tuning, static_cast<const char*>(data) + tuningOffset, sizeof(tuning));
+    }
+
+    const PathOptions options = MakePathOptions(request.flags, hasTuning ? &tuning : nullptr);
+
     Path& path = client->GetPathBuffer();
     Path& scratch = client->GetScratchPathBuffer();
     ExploreResult result;
 
     const bool ok = Navigation->ExplorePolygon(handler->GetId(), request.mapId, request.start, polygon,
-                                               request.spacing, path, &result);
+                                               request.spacing, path, &result, &options);
 
     if (ok)
     {

@@ -8,6 +8,8 @@
 #include <unordered_map>
 #include <utility>
 
+#include <DetourPathCorridor.h>
+
 #include "../../../AmeisenNavigation.Pack/src/DetourUtils.hpp"
 #include "../NavSources/IQueryFilterProvider.hpp"
 #include "../Utils/Path.hpp"
@@ -21,6 +23,14 @@ struct AreaCost
 {
     unsigned char areaId;
     float cost;
+};
+
+/// Corridor of the client's last follow path (PathOptions::follow).
+struct FollowState
+{
+    int mapId = -1; // -1 = no corridor
+    bool partial = false;
+    dtPathCorridor corridor;
 };
 
 /// Per-connection navigation state: the active query filter and reusable buffers. dtNavMeshQuery objects are
@@ -44,6 +54,7 @@ class AmeisenNavClient
     std::unique_ptr<dtPolyRef[]> StraightPathRefs;
     Path PrimaryPath;
     Path SecondaryPath;
+    std::unique_ptr<FollowState> Follow;
 
 public:
     AmeisenNavClient(size_t id, const IQueryFilterProvider* filterProvider, int polyPathBufferSize = 512,
@@ -85,6 +96,33 @@ public:
     Path& GetPathBuffer() noexcept { return PrimaryPath; }
     Path& GetScratchPathBuffer() noexcept { return SecondaryPath; }
 
+    /// The follow corridor (created on first use, nullptr if that fails).
+    FollowState* GetFollowState() noexcept
+    {
+        if (!Follow)
+        {
+            auto state = std::unique_ptr<FollowState>(new (std::nothrow) FollowState());
+
+            if (!state || !state->corridor.init(PolyPathBufferSize))
+            {
+                return nullptr;
+            }
+
+            Follow = std::move(state);
+        }
+
+        return Follow.get();
+    }
+
+    /// Forget the follow corridor (the next follow request searches again).
+    void ResetFollow() noexcept
+    {
+        if (Follow)
+        {
+            Follow->mapId = -1;
+        }
+    }
+
     /// Select the base filter by state and apply area cost overrides on top of it.
     /// Returns false (and changes nothing) for invalid states, area ids or costs.
     bool ConfigureQueryFilter(ClientState state, std::span<const AreaCost> costs) noexcept
@@ -112,6 +150,7 @@ public:
         }
 
         State = state;
+        ResetFollow(); // the corridor was searched with the old costs
 
         if (costs.empty())
         {
