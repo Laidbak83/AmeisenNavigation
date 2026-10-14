@@ -165,22 +165,37 @@ bool AmeisenNavigation::GetRandomPath(size_t clientId, int mapId, const Vector3&
 
     if (maxRandomDistance > 0.0f)
     {
-        // Keep start and end, jitter every corner in between on the navmesh.
+        // Keep start and end, jitter every corner in between on the navmesh. An offset is only kept if the way to it
+        // and on to the next corner stays on the navmesh (no shortcut over a ledge or into a wall).
+        PolyPosition previous{cornerRefs[0], path[0]};
+
         for (int i = 1; i < path.pointCount - 1; ++i)
         {
-            if (!cornerRefs[i])
+            const PolyPosition original{cornerRefs[i], path[i]};
+
+            if (!original.poly || !previous.poly)
             {
+                previous = original;
                 continue;
             }
 
-            dtPolyRef randomRef = 0;
-            Vector3 randomPoint;
-            const dtStatus status = ctx.query->findRandomPointAroundCircle(
-                cornerRefs[i], path[i], maxRandomDistance, ctx.filter, GetRandomFloat, &randomRef, randomPoint);
+            PolyPosition jittered;
+            const dtStatus status =
+                ctx.query->findRandomPointAroundCircle(original.poly, original.pos, maxRandomDistance, ctx.filter,
+                                                       GetRandomFloat, &jittered.poly, jittered.pos);
+            dtRaycastHit toIt{};
+            dtRaycastHit fromIt{};
 
-            if (dtStatusSucceed(status) && randomRef)
+            if (dtStatusSucceed(status) && jittered.poly
+                && Raycast(ctx.query, ctx.filter, previous, jittered.pos, toIt) && toIt.t == FLT_MAX
+                && Raycast(ctx.query, ctx.filter, jittered, path[i + 1], fromIt) && fromIt.t == FLT_MAX)
             {
-                path[i] = randomPoint;
+                path[i] = jittered.pos;
+                previous = jittered;
+            }
+            else
+            {
+                previous = original;
             }
         }
     }
@@ -362,16 +377,11 @@ bool AmeisenNavigation::CastMovementRay(size_t clientId, int mapId, const Vector
         return false;
     }
 
-    // dtRaycastHit has no constructor, path/maxPath MUST be initialized or Detour writes through garbage.
     dtRaycastHit hit{};
-    hit.path = nullptr;
-    hit.maxPath = 0;
 
-    const dtStatus status = ctx.query->raycast(start.poly, start.pos, rdEnd, ctx.filter, 0, &hit);
-
-    if (dtStatusFailed(status))
+    if (!Raycast(ctx.query, ctx.filter, start, rdEnd, hit))
     {
-        LogD("[", clientId, "] raycast failed: 0x", std::format("{:08X}", status));
+        LogD("[", clientId, "] raycast failed");
         return false;
     }
 
@@ -391,6 +401,67 @@ bool AmeisenNavigation::CastMovementRay(size_t clientId, int mapId, const Vector
     res.hitPosition = rdHit.ToWowCoords();
     res.hitNormal = Vector3(hit.hitNormal).ToWowCoords();
     return false;
+}
+
+bool AmeisenNavigation::Raycast(const dtNavMeshQuery* query, const dtQueryFilter* filter, const PolyPosition& start,
+                                const Vector3& rdEnd, dtRaycastHit& hit) noexcept
+{
+    // Polygons touching the start: the start's own one plus those around it whose surface contains it.
+    constexpr int MAX_START_POLYS = 16;
+    constexpr float TOUCH_EXTENTS[3]{0.05f, 2.0f, 0.05f};
+    dtPolyRef candidates[MAX_START_POLYS]{start.poly};
+    int candidateCount = 1;
+    dtPolyRef around[MAX_START_POLYS]{};
+    int aroundCount = 0;
+
+    if (dtStatusSucceed(query->queryPolygons(start.pos, TOUCH_EXTENTS, filter, around, &aroundCount, MAX_START_POLYS)))
+    {
+        for (int i = 0; i < aroundCount && candidateCount < MAX_START_POLYS; ++i)
+        {
+            Vector3 closest;
+            bool over = false;
+
+            if (around[i] != start.poly && dtStatusSucceed(query->closestPointOnPoly(around[i], start.pos, closest, &over))
+                && dtVdist2DSqr(closest, start.pos) < 1e-4f && std::fabs(closest.y - start.pos.y) < 1.0f)
+            {
+                candidates[candidateCount++] = around[i];
+            }
+        }
+    }
+
+    const float length = dtVdist(start.pos, rdEnd);
+    bool cast = false;
+
+    for (int i = 0; i < candidateCount; ++i)
+    {
+        // dtRaycastHit has no constructor, path/maxPath MUST be initialized or Detour writes through garbage.
+        dtRaycastHit current{};
+        current.path = nullptr;
+        current.maxPath = 0;
+
+        if (dtStatusFailed(query->raycast(candidates[i], start.pos, rdEnd, filter, 0, &current)))
+        {
+            continue;
+        }
+
+        if (current.t != FLT_MAX && length > 0.0f && (1.0f - current.t) * length < RAYCAST_END_TOLERANCE)
+        {
+            current.t = FLT_MAX;
+        }
+
+        if (!cast || current.t > hit.t)
+        {
+            hit = current;
+            cast = true;
+        }
+
+        if (hit.t == FLT_MAX)
+        {
+            break;
+        }
+    }
+
+    return cast;
 }
 
 bool AmeisenNavigation::PostProcessClosestPointOnPoly(size_t clientId, int mapId, const Path& input, Path& output)
@@ -572,7 +643,7 @@ bool AmeisenNavigation::ExplorePolygon(size_t clientId, int mapId, const Vector3
     // Connect the waypoints in tour order with navmesh paths. Segments use their own buffer, the client's
     // path buffers may be the output.
     Path segment(Settings.maxPointPath);
-    const std::vector<int> order = Tour::Order(startPosition, waypoints);
+    const std::vector<int> order = Tour::Order(startPosition, waypoints, 8, spacing * 0.5f);
     std::vector<bool> unreachable(waypoints.size(), false);
 
     for (size_t o = 0; o < order.size(); ++o)

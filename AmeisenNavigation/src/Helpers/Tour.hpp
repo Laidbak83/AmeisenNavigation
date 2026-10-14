@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cmath>
 #include <numeric>
 #include <span>
 #include <vector>
@@ -29,8 +30,10 @@ inline float Length(const Vector3& start, std::span<const Vector3> points, const
 
 /// Order points into a short open tour beginning at `start`: nearest neighbour construction improved by
 /// 2-opt moves (segment reversals) until a pass gains less than MIN_PASS_GAIN or maxPasses is reached.
-/// Returns point indices.
-inline std::vector<int> Order(const Vector3& start, std::span<const Vector3> points, int maxPasses = 8)
+/// turnPenalty (distance per radian of turn, 0 = off) makes the construction prefer going straight on: on a grid
+/// many neighbours are equally close, without it the tour zigzags between rows. Returns point indices.
+inline std::vector<int> Order(const Vector3& start, std::span<const Vector3> points, int maxPasses = 8,
+                              float turnPenalty = 0.0f)
 {
     const int n = static_cast<int>(points.size());
     std::vector<int> order;
@@ -39,11 +42,14 @@ inline std::vector<int> Order(const Vector3& start, std::span<const Vector3> poi
     // Nearest neighbour.
     std::vector<bool> used(points.size(), false);
     Vector3 current = start;
+    float headingX = 0.0f;
+    float headingY = 0.0f;
+    bool hasHeading = false;
 
     for (int step = 0; step < n; ++step)
     {
         int best = -1;
-        float bestDistance = 0.0f;
+        float bestScore = 0.0f;
 
         for (int i = 0; i < n; ++i)
         {
@@ -52,18 +58,45 @@ inline std::vector<int> Order(const Vector3& start, std::span<const Vector3> poi
                 continue;
             }
 
-            const float d = current.DistanceTo(points[static_cast<size_t>(i)]);
+            const Vector3& p = points[static_cast<size_t>(i)];
+            const float d = current.DistanceTo(p);
+            float score = d;
 
-            if (best < 0 || d < bestDistance)
+            if (turnPenalty > 0.0f && hasHeading && d > 1e-4f)
+            {
+                const float dx = p.x - current.x;
+                const float dy = p.y - current.y;
+                const float horizontal = std::sqrt(dx * dx + dy * dy);
+
+                if (horizontal > 1e-4f)
+                {
+                    const float cosine = std::clamp((dx * headingX + dy * headingY) / horizontal, -1.0f, 1.0f);
+                    score += turnPenalty * std::acos(cosine);
+                }
+            }
+
+            if (best < 0 || score < bestScore)
             {
                 best = i;
-                bestDistance = d;
+                bestScore = score;
             }
+        }
+
+        const Vector3& next = points[static_cast<size_t>(best)];
+        const float dx = next.x - current.x;
+        const float dy = next.y - current.y;
+        const float horizontal = std::sqrt(dx * dx + dy * dy);
+
+        if (horizontal > 1e-4f)
+        {
+            headingX = dx / horizontal;
+            headingY = dy / horizontal;
+            hasHeading = true;
         }
 
         used[static_cast<size_t>(best)] = true;
         order.push_back(best);
-        current = points[static_cast<size_t>(best)];
+        current = next;
     }
 
     // 2-opt on the open path start -> order[0] -> ... -> order[n-1] (the start stays fixed, the end is free).

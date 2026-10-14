@@ -213,6 +213,48 @@ TEST_CASE(Navigation_RaycastHitsWall)
     CHECK_NEAR(open.t, 1.0f, 1e-6);
 }
 
+TEST_CASE(Navigation_RaysBetweenPathCornersAreClear)
+{
+    EnsureClient();
+
+    // Path corners lie on polygon corners/edges (around both wall ends and around the platform).
+    const std::pair<Vector3, Vector3> routes[]{
+        {Wow(-700.0f, 0.0f, -300.0f), Wow(-200.0f, 0.0f, -300.0f)},
+        {Wow(-470.0f, 0.0f, -425.0f), Wow(-380.0f, 0.0f, -425.0f)},
+        {Wow(-310.0f, 0.0f, -510.0f), Wow(-290.0f, 0.0f, -510.0f)},
+    };
+
+    for (const auto& [start, end] : routes)
+    {
+        Path path(256);
+        REQUIRE(Navigation().GetPath(CLIENT, TestWorld::MAP_ID, start, end, path));
+
+        for (int i = 1; i < path.pointCount; ++i)
+        {
+            RaycastResult hit;
+            CHECK(Navigation().CastMovementRay(CLIENT, TestWorld::MAP_ID, path[i - 1], path[i], &hit));
+            CHECK(!hit.hit);
+        }
+    }
+}
+
+TEST_CASE(Navigation_StartInTheAirUsesTheGroundBelow)
+{
+    EnsureClient();
+
+    Path path(256);
+    // 30 yards above the ground: beyond the normal search, within the vertical fallback.
+    REQUIRE(Navigation().GetPath(CLIENT, TestWorld::MAP_ID, Wow(-700.0f, 30.0f, -200.0f),
+                                 Wow(-600.0f, 25.0f, -200.0f), path));
+    CHECK_NEAR(path[0].z, 0.0f, 0.6);
+    CHECK_NEAR(path[path.pointCount - 1].z, 0.0f, 0.6);
+
+    // Horizontally off the mesh stays a failure. (Vertically Detour clamps the search box to the tile's height
+    // range, above this flat tile any height finds the ground; the fallback matters in tiles with tall terrain.)
+    CHECK(!Navigation().GetPath(CLIENT, TestWorld::MAP_ID, Wow(-700.0f, 0.0f, 30.0f), Wow(-600.0f, 0.0f, -200.0f),
+                                path));
+}
+
 TEST_CASE(Navigation_GetHeightPicksClosestFloor)
 {
     EnsureClient();
@@ -278,6 +320,24 @@ TEST_CASE(Navigation_RandomPathKeepsEndpoints)
     REQUIRE(path.pointCount >= 2);
     CHECK_NEAR(path[path.pointCount - 1].x, end.x, 1.5);
     CHECK_NEAR(path[path.pointCount - 1].y, end.y, 1.5);
+}
+
+TEST_CASE(Navigation_RandomPathNeverCutsThroughWalls)
+{
+    EnsureClient();
+
+    // Big offsets next to the wall and the platform: every segment must stay walkable.
+    for (int run = 0; run < 20; ++run)
+    {
+        Path path(256);
+        REQUIRE(Navigation().GetRandomPath(CLIENT, TestWorld::MAP_ID, Wow(-470.0f, 0.0f, -470.0f),
+                                           Wow(-200.0f, 0.0f, -300.0f), path, 25.0f));
+
+        for (int i = 1; i < path.pointCount; ++i)
+        {
+            CHECK(Navigation().CastMovementRay(CLIENT, TestWorld::MAP_ID, path[i - 1], path[i]));
+        }
+    }
 }
 
 TEST_CASE(Navigation_RandomPathWithOversizedCallerBuffer)

@@ -43,6 +43,14 @@ inline float GetRandomFloat() noexcept
 /// Search neighborhood half-extents for dtNavMeshQuery::findNearestPoly (in RD coordinates).
 constexpr float NEAREST_POLY_EXTENTS[3] = {6.0f, 6.0f, 6.0f};
 
+/// Second search for start/end positions with nothing within NEAREST_POLY_EXTENTS: a character in the air (jumping,
+/// falling, flying, on a mount above the ground) gets the navmesh below it.
+constexpr float NEAREST_POLY_FALLBACK_EXTENTS[3] = {6.0f, 50.0f, 6.0f};
+
+/// A raycast that stops this close to its end counts as clear: an end exactly on a polygon edge or corner (path
+/// corners are) is otherwise reported as a wall hit at t = 1.
+constexpr float RAYCAST_END_TOLERANCE = 0.05f;
+
 /// Larger vertical search extents for height queries where the input Z is unknown/unreliable.
 constexpr float HEIGHT_QUERY_EXTENTS[3] = {6.0f, 2500.0f, 6.0f};
 
@@ -233,13 +241,22 @@ private:
         return dtStatusSucceed(status) && result.poly != 0;
     }
 
+    /// Nearest polygon to a position given by a client (start/end of a request): within NEAREST_POLY_EXTENTS, else
+    /// within NEAREST_POLY_FALLBACK_EXTENTS.
     static bool FindNearestPolyWow(const dtNavMeshQuery* query, const dtQueryFilter* filter,
                                    const Vector3& wowPosition, PolyPosition& result) noexcept
     {
         Vector3 rd;
         wowPosition.CopyToRDCoords(rd);
-        return FindNearestPoly(query, filter, rd, result);
+        return FindNearestPoly(query, filter, rd, result)
+               || FindNearestPoly(query, filter, rd, result, NEAREST_POLY_FALLBACK_EXTENTS);
     }
+
+    /// Raycast along the navmesh from start to rdEnd. A start on a polygon edge or corner touches several polygons,
+    /// Detour casts from one of them only and may leave it through a border edge at t = 0: the ray is cast from
+    /// every polygon touching the start and the furthest result wins. Returns false if no ray could be cast.
+    static bool Raycast(const dtNavMeshQuery* query, const dtQueryFilter* filter, const PolyPosition& start,
+                        const Vector3& rdEnd, dtRaycastHit& hit) noexcept;
 
     /// moveAlongSurface from `position` towards rdTarget. On success `position` is the result, projected onto the
     /// surface (moveAlongSurface doesn't fix the height), and the polygon holding it.

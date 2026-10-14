@@ -358,6 +358,38 @@ TEST_CASE(Tour_OrderIsAShortPermutation)
     CHECK(Tour::Order(start, std::span<const Vector3>()).empty());
 }
 
+TEST_CASE(Tour_TurnPenaltyWalksRows)
+{
+    const Vector3 square[] = {{0, 0, 0}, {200, 0, 0}, {200, 200, 0}, {0, 200, 0}};
+    const auto points = PolygonMath::HexGridSampling(square, 10.0f, 1024);
+    REQUIRE(points.size() > 300);
+    const Vector3 start(0.0f, 0.0f, 0.0f);
+
+    const auto sharpTurns = [&](const std::vector<int>& order) {
+        int turns = 0;
+
+        for (size_t i = 2; i < order.size(); ++i)
+        {
+            const Vector3& a = points[static_cast<size_t>(order[i - 2])];
+            const Vector3& b = points[static_cast<size_t>(order[i - 1])];
+            const Vector3& c = points[static_cast<size_t>(order[i])];
+            const float ux = b.x - a.x, uy = b.y - a.y, vx = c.x - b.x, vy = c.y - b.y;
+            const float cosine = (ux * vx + uy * vy) / (std::sqrt(ux * ux + uy * uy) * std::sqrt(vx * vx + vy * vy));
+            turns += cosine < 0.7f ? 1 : 0; // more than ~45 degrees
+        }
+
+        return turns;
+    };
+
+    const auto plain = Tour::Order(start, points);
+    const auto rows = Tour::Order(start, points, 8, 5.0f);
+    REQUIRE(rows.size() == points.size());
+
+    // Rows: a turn at the end of each row instead of zigzags all along, about as short.
+    CHECK(sharpTurns(rows) * 2 < sharpTurns(plain));
+    CHECK(Tour::Length(start, points, rows) < Tour::Length(start, points, plain) * 1.1f);
+}
+
 TEST_CASE(Polygon_SamplingRejectsHugeOrInvalidPolygons)
 {
     const Vector3 huge[] = {{-1e30f, -1e30f, 0}, {1e30f, -1e30f, 0}, {0, 1e30f, 0}};
