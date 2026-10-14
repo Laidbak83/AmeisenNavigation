@@ -25,6 +25,13 @@ struct ExportOptions
     /// Game object spawns whose collision is added (see GameObjects.hpp for the file format), empty = none.
     std::filesystem::path gameObjects;
     std::vector<int> gameObjectExcludedTypes{0, 11, 15, 33, 35}; // doors, transports, destructible, trapdoors
+
+    /// TrinityCore extractor output (`maps/`, `vmaps/`) instead of a client folder, for clients the exporter can't
+    /// read (CASC: Legion and later, the classic flavours). wowDir is unused then. Game object displayIds are resolved
+    /// through vmaps/GameObjectModels.dtree.
+    std::filesystem::path tcDataDir;
+    std::filesystem::path areaTableCsv;  // AreaTable as CSV (ID, ParentAreaID, Flags, FactionGroupMask), TC data only
+    std::filesystem::path liquidTypeCsv; // LiquidType as CSV (ID, SoundBank), TC data only
 };
 
 /// Outcome of one map.
@@ -63,6 +70,9 @@ std::filesystem::path ResolveDataDir(const std::filesystem::path& wowDir);
 
 /// Maps listed in Map.dbc (id, directory name). Empty if the client data can't be read.
 std::vector<std::pair<unsigned int, std::string>> ListMaps(const std::filesystem::path& wowDir);
+
+/// Maps with files in a TrinityCore data folder (id, file counts).
+std::vector<std::pair<unsigned int, std::string>> ListTcMaps(const std::filesystem::path& tcDataDir);
 
 /// Export the selected maps to .anp navmeshes.
 ExportReport RunExport(const ExportOptions& options);

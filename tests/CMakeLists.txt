@@ -29,7 +29,8 @@ target_link_libraries(anav_benchmark PRIVATE anav_core anav_exporter_core anav_o
 if(TARGET anav_exporter_lib)
     add_executable(anav_exporter_tests
         TestMain.cpp
-        E2EExporterTests.cpp)
+        E2EExporterTests.cpp
+        E2ETcDataTests.cpp)
     target_link_libraries(anav_exporter_tests PRIVATE anav_server_lib anav_exporter_lib anav_options)
     add_test(NAME exporter COMMAND anav_exporter_tests)
     set_tests_properties(exporter PROPERTIES TIMEOUT 600)

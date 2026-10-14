@@ -18,38 +18,24 @@ struct ClientData
     std::unordered_map<int, std::vector<GameObjectSpawn>> gameObjects; // per map
 };
 
-/// AreaTable.dbc (WotLK 3.3.5a): field 0 = ID, 2 = ParentAreaID, 4 = Flags, 28 = FactionGroupMask.
-/// FactionGroupMask: 0 = contested, 2 = Alliance, 4 = Horde, 6 = sanctuary. Flags: 0x08 capital, 0x20 town.
-/// Sub areas (e.g. "Trade District") inherit faction/city status from their parents.
-AreaData LoadAreaData(const Dbc* areaTableDbc)
+struct AreaInfo
+{
+    unsigned int parentId;
+    unsigned int flags;
+    unsigned char faction; // 0 = unknown, 1 = Alliance, 2 = Horde
+};
+
+/// FactionGroupMask: 0 = contested, 2 = Alliance, 4 = Horde, 6 = sanctuary.
+constexpr unsigned char FactionFromMask(long long factionGroupMask) noexcept
+{
+    return factionGroupMask == 2 ? 1 : (factionGroupMask == 4 ? 2 : 0);
+}
+
+/// Faction and city areas. Sub areas (e.g. "Trade District") inherit faction/city status from their parents.
+AreaData BuildAreaData(const std::unordered_map<unsigned int, AreaInfo>& allAreas, unsigned int cityFlags,
+                       std::string_view source)
 {
     AreaData result;
-
-    if (!areaTableDbc || !areaTableDbc->IsValid())
-    {
-        LogW("AreaTable.dbc missing or invalid - faction/city data will be unavailable");
-        return result;
-    }
-
-    constexpr unsigned int AREA_FLAG_CAPITAL = 0x08;
-    constexpr unsigned int AREA_FLAG_SLAVE_CAPITAL = 0x20;
-
-    struct AreaInfo
-    {
-        unsigned int parentId;
-        unsigned int flags;
-        unsigned char faction; // 0 = unknown, 1 = Alliance, 2 = Horde
-    };
-
-    std::unordered_map<unsigned int, AreaInfo> allAreas;
-
-    for (unsigned int i = 0u; i < areaTableDbc->GetRecordCount(); ++i)
-    {
-        const auto factionGroupMask = areaTableDbc->Read<unsigned int>(i, 28u);
-        const unsigned char faction = factionGroupMask == 2 ? 1 : (factionGroupMask == 4 ? 2 : 0);
-        allAreas[areaTableDbc->Read<unsigned int>(i, 0u)] = {areaTableDbc->Read<unsigned int>(i, 2u),
-                                                               areaTableDbc->Read<unsigned int>(i, 4u), faction};
-    }
 
     const auto walkParents = [&](unsigned int areaId, auto&& predicate) -> const AreaInfo* {
         unsigned int current = areaId;
@@ -82,17 +68,184 @@ AreaData LoadAreaData(const Dbc* areaTableDbc)
             result.factions[areaId] = f->faction;
         }
 
-        if (walkParents(areaId, [](const AreaInfo& a) {
-                return (a.flags & (AREA_FLAG_CAPITAL | AREA_FLAG_SLAVE_CAPITAL)) != 0;
-            }))
+        if (walkParents(areaId, [cityFlags](const AreaInfo& a) { return (a.flags & cityFlags) != 0; }))
         {
             result.cities.insert(areaId);
         }
     }
 
-    LogI(std::format("AreaTable.dbc: {} areas, {} faction-marked, {} city-marked", allAreas.size(),
+    LogI(std::format("{}: {} areas, {} faction-marked, {} city-marked", source, allAreas.size(),
                      result.factions.size(), result.cities.size()));
     return result;
+}
+
+/// AreaTable.dbc (WotLK 3.3.5a): field 0 = ID, 2 = ParentAreaID, 4 = Flags, 28 = FactionGroupMask.
+/// Flags: 0x08 capital, 0x20 town.
+AreaData LoadAreaData(const Dbc* areaTableDbc)
+{
+    if (!areaTableDbc || !areaTableDbc->IsValid())
+    {
+        LogW("AreaTable.dbc missing or invalid - faction/city data will be unavailable");
+        return {};
+    }
+
+    constexpr unsigned int AREA_FLAG_CAPITAL = 0x08;
+    constexpr unsigned int AREA_FLAG_SLAVE_CAPITAL = 0x20;
+    std::unordered_map<unsigned int, AreaInfo> allAreas;
+
+    for (unsigned int i = 0u; i < areaTableDbc->GetRecordCount(); ++i)
+    {
+        allAreas[areaTableDbc->Read<unsigned int>(i, 0u)] = {
+            areaTableDbc->Read<unsigned int>(i, 2u), areaTableDbc->Read<unsigned int>(i, 4u),
+            FactionFromMask(areaTableDbc->Read<unsigned int>(i, 28u))};
+    }
+
+    return BuildAreaData(allAreas, AREA_FLAG_CAPITAL | AREA_FLAG_SLAVE_CAPITAL, "AreaTable.dbc");
+}
+
+/// Split one CSV line (comma, semicolon or tab separated, double quotes around fields with separators).
+std::vector<std::string> SplitCsvLine(std::string_view line)
+{
+    const char delimiter = line.find('\t') != std::string_view::npos   ? '\t'
+                           : line.find(';') != std::string_view::npos ? ';'
+                                                                      : ',';
+    std::vector<std::string> fields(1);
+    bool quoted = false;
+
+    for (size_t i = 0; i < line.size(); ++i)
+    {
+        const char c = line[i];
+
+        if (c == '"')
+        {
+            if (quoted && i + 1 < line.size() && line[i + 1] == '"')
+            {
+                fields.back() += '"';
+                ++i;
+            }
+            else
+            {
+                quoted = !quoted;
+            }
+        }
+        else if (c == delimiter && !quoted)
+        {
+            fields.emplace_back();
+        }
+        else if (c != '\r')
+        {
+            fields.back() += c;
+        }
+    }
+
+    return fields;
+}
+
+/// Numeric columns of a table exported as CSV with a header line (wago.tools, DB2 tools). Each column is given by
+/// its possible names (case insensitive), rows without the first column are skipped, missing values are 0.
+std::vector<std::vector<long long>> ReadCsvColumns(const std::filesystem::path& file,
+                                                   const std::vector<std::vector<std::string>>& columns)
+{
+    std::vector<std::vector<long long>> rows;
+    std::ifstream in(file);
+    std::vector<int> indices;
+
+    for (std::string line; std::getline(in, line);)
+    {
+        const auto fields = SplitCsvLine(line);
+
+        if (indices.empty())
+        {
+            for (const auto& names : columns)
+            {
+                int index = -1;
+
+                for (size_t i = 0; i < fields.size() && index < 0; ++i)
+                {
+                    const std::string name = GameObjects::Lower(GameObjects::Trim(fields[i]));
+
+                    if (std::find(names.begin(), names.end(), name) != names.end())
+                    {
+                        index = static_cast<int>(i);
+                    }
+                }
+
+                indices.push_back(index);
+            }
+
+            if (indices.empty() || indices[0] < 0)
+            {
+                LogW("\"", file.string(), "\": no ", columns[0][0], " column in the header line");
+                return rows;
+            }
+
+            continue;
+        }
+
+        std::vector<long long> row;
+
+        for (const int index : indices)
+        {
+            long long value = 0;
+            const std::string_view field =
+                index >= 0 && static_cast<size_t>(index) < fields.size() ? GameObjects::Trim(fields[index]) : "";
+
+            if (!GameObjects::Parse(field, value) && index == indices[0])
+            {
+                row.clear();
+                break;
+            }
+
+            row.push_back(value);
+        }
+
+        if (!row.empty())
+        {
+            rows.push_back(std::move(row));
+        }
+    }
+
+    return rows;
+}
+
+/// AreaTable exported as CSV (recent clients). Flags 0x08 (AllowTradeChannel) marks the capitals.
+AreaData LoadAreaDataCsv(const std::filesystem::path& file)
+{
+    std::unordered_map<unsigned int, AreaInfo> allAreas;
+
+    for (const auto& row : ReadCsvColumns(file, {{"id"},
+                                                 {"parentareaid", "parentarea"},
+                                                 {"flags[0]", "flags_0", "flags0", "flags"},
+                                                 {"factiongroupmask"}}))
+    {
+        allAreas[static_cast<unsigned int>(row[0])] = {static_cast<unsigned int>(row[1]),
+                                                       static_cast<unsigned int>(row[2]), FactionFromMask(row[3])};
+    }
+
+    if (allAreas.empty())
+    {
+        LogW("No areas read from \"", file.string(), "\" - faction/city data will be unavailable");
+        return {};
+    }
+
+    return BuildAreaData(allAreas, 0x08, file.filename().string());
+}
+
+/// LiquidType exported as CSV (recent clients): ID and SoundBank (0 water, 1 ocean, 2 magma, 3 slime).
+std::unordered_map<unsigned int, LiquidType> LoadLiquidTypesCsv(const std::filesystem::path& file)
+{
+    std::unordered_map<unsigned int, LiquidType> types;
+
+    for (const auto& row : ReadCsvColumns(file, {{"id"}, {"soundbank"}}))
+    {
+        if (row[1] >= 0 && row[1] <= 3)
+        {
+            types[static_cast<unsigned int>(row[0])] = static_cast<LiquidType>(row[1]);
+        }
+    }
+
+    LogI(std::format("{}: {} liquid types", file.filename().string(), types.size()));
+    return types;
 }
 
 /// Load Map.dbc (required), LiquidType.dbc and AreaTable.dbc.
@@ -203,6 +356,147 @@ std::vector<AdtCoord> AdtsCoveringGeometry(Structure& geometry)
     }
 
     return adts;
+}
+
+/// Add the collision of the server spawned game objects on the exported ADTs (all of them for WMO-only maps). add
+/// returns false if the model wasn't found.
+void AddGameObjects(const std::vector<GameObjectSpawn>& spawns, const std::vector<AdtCoord>& adts,
+                    const ExportOptions& options, const std::string& mapName, MapData& map, MapExportStats& stats,
+                    const std::function<bool(const GameObjectSpawn&, Structure*)>& add)
+{
+    std::unordered_set<int> exportedAdts;
+
+    for (const auto& adt : adts)
+    {
+        exportedAdts.insert(adt.x * 64 + adt.y);
+    }
+
+    Structure objects;
+
+    for (const GameObjectSpawn& spawn : spawns)
+    {
+        const int adtX = 31 - static_cast<int>(std::floor(spawn.position.y / TILESIZE));
+        const int adtY = 31 - static_cast<int>(std::floor(spawn.position.x / TILESIZE));
+
+        if (!stats.wmoOnly && !exportedAdts.contains(adtX * 64 + adtY))
+        {
+            continue;
+        }
+
+        if (std::find(options.gameObjectExcludedTypes.begin(), options.gameObjectExcludedTypes.end(), spawn.type)
+            != options.gameObjectExcludedTypes.end())
+        {
+            continue;
+        }
+
+        if (add(spawn, &objects))
+        {
+            stats.gameObjects++;
+        }
+        else
+        {
+            stats.gameObjectsMissing++;
+            LogD("[", mapName, "] game object display ", spawn.displayId, " (", spawn.model, "): model not found");
+        }
+    }
+
+    objects.Clean();
+    map.geometry.Append(objects);
+    LogI(std::format("[{}] Game objects: {} added, {} without a model", mapName, stats.gameObjects,
+                     stats.gameObjectsMissing));
+}
+
+/// Build the navmesh of an extracted map and save it. freeInput releases the input files before the memory hungry
+/// build.
+MapExportStats BuildMap(unsigned int mapId, const std::string& mapName, const ExportOptions& options, MapData& map,
+                        const std::vector<AdtCoord>& adts, MapExportStats stats,
+                        const std::chrono::steady_clock::time_point mapStart, const std::function<void()>& freeInput)
+{
+    stats.adts = static_cast<int>(adts.size());
+    stats.vertices = map.geometry.verts.size();
+    stats.triangles = map.geometry.tris.size();
+    stats.waterRects = map.water.rects.size();
+    stats.roadRects = map.roads.rects.size();
+    stats.cityRects = map.cities.rects.size();
+    stats.factionRects = map.factions.rects.size();
+
+    if (map.geometry.verts.empty() || map.geometry.tris.empty())
+    {
+        LogW("[", mapName, "] no geometry extracted, skipping");
+        stats.skipped = true;
+        return stats;
+    }
+
+    // Detour tile grid aligned to the ADT grid: tile (x, y) = ADT (maxX - x, maxY - y).
+    int maxAdtX = 0;
+    int maxAdtY = 0;
+
+    for (const auto& adt : adts)
+    {
+        maxAdtX = std::max(maxAdtX, adt.x);
+        maxAdtY = std::max(maxAdtY, adt.y);
+    }
+
+    dtNavMeshParams params{};
+    params.orig[0] = static_cast<float>(31 - maxAdtX) * TILESIZE;
+    params.orig[1] = 0.0f;
+    params.orig[2] = static_cast<float>(31 - maxAdtY) * TILESIZE;
+    params.tileWidth = TILESIZE;
+    params.tileHeight = TILESIZE;
+    params.maxTiles = WDT_MAP_SIZE * WDT_MAP_SIZE;
+    params.maxPolys = 1 << 20; // ignored with 64 bit poly refs, kept positive for 32 bit readers
+
+    std::vector<TileCoord> tiles;
+    tiles.reserve(adts.size());
+
+    for (const auto& adt : adts)
+    {
+        tiles.push_back({maxAdtX - adt.x, maxAdtY - adt.y, adt.x, adt.y});
+    }
+
+    map.water.BuildSpatialIndex();
+    map.roads.BuildSpatialIndex();
+    map.cities.BuildSpatialIndex();
+    map.factions.BuildSpatialIndex();
+
+    LogI(std::format("[{}] Geometry: {} verts, {} tris | Water: {} | Roads: {} | Cities: {} | Factions: {}", mapName,
+                     stats.vertices, stats.triangles, stats.waterRects, stats.roadRects, stats.cityRects,
+                     stats.factionRects));
+
+    freeInput();
+
+    TileBuildConfig buildConfig = options.buildConfig;
+    buildConfig.debugBmp = buildConfig.debugBmp || options.debug;
+
+    Anp::AnpWriter writer(static_cast<int>(mapId), params);
+    AdtTileProcessor processor(&writer, options.outputDir, mapName, buildConfig);
+    processor.Process(&map.geometry, tiles, &map.water, &map.roads, &map.factions, &map.cities);
+
+    stats.tilesBuilt = processor.GetStats().built.load();
+    stats.tilesFailed = processor.GetStats().failed.load();
+    stats.failed = stats.tilesFailed > 0;
+
+    if (writer.GetTileCount() == 0)
+    {
+        LogW("[", mapName, "] no navmesh tiles were built, nothing saved");
+        stats.skipped = !stats.failed;
+        return stats;
+    }
+
+    if (!writer.Save(options.outputDir))
+    {
+        LogE("[", mapName, "] failed to save ", Anp::FileName(static_cast<int>(mapId)));
+        stats.failed = true;
+        return stats;
+    }
+
+    stats.exported = true;
+
+    const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - mapStart).count();
+    LogS(std::format("[{}] Saved {} ({} tiles, {:.1f} MB) in {}", mapName, Anp::FileName(static_cast<int>(mapId)),
+                     writer.GetTileCount(), writer.GetStoredBytes() / (1024.0 * 1024.0),
+                     Logger::FormatDuration(seconds)));
+    return stats;
 }
 
 /// Export one map. Missing data is not an error, only failed tiles or I/O are.
@@ -317,142 +611,367 @@ MapExportStats ExportMap(unsigned int mapId, const std::string& mapName, const E
     // Game objects spawned by the server, on the exported ADTs.
     if (const auto spawns = client.gameObjects.find(static_cast<int>(mapId)); spawns != client.gameObjects.end())
     {
-        std::unordered_set<int> exportedAdts;
+        AddGameObjects(spawns->second, adts, options, mapName, map, stats,
+                       [&](const GameObjectSpawn& spawn, Structure* objects) {
+                           std::string model = spawn.model;
 
-        for (const auto& adt : adts)
-        {
-            exportedAdts.insert(adt.x * 64 + adt.y);
-        }
+                           if (model.empty())
+                           {
+                               const auto it = client.gameObjectModels.find(spawn.displayId);
+                               model = it != client.gameObjectModels.end() ? it->second : std::string();
+                           }
 
-        Structure objects;
-
-        for (const GameObjectSpawn& spawn : spawns->second)
-        {
-            const int adtX = 31 - static_cast<int>(std::floor(spawn.position.y / TILESIZE));
-            const int adtY = 31 - static_cast<int>(std::floor(spawn.position.x / TILESIZE));
-
-            if (!stats.wmoOnly && !exportedAdts.contains(adtX * 64 + adtY))
-            {
-                continue;
-            }
-
-            if (std::find(options.gameObjectExcludedTypes.begin(), options.gameObjectExcludedTypes.end(), spawn.type)
-                != options.gameObjectExcludedTypes.end())
-            {
-                continue;
-            }
-
-            std::string model = spawn.model;
-
-            if (model.empty())
-            {
-                const auto it = client.gameObjectModels.find(spawn.displayId);
-                model = it != client.gameObjectModels.end() ? it->second : std::string();
-            }
-
-            if (!model.empty() && GameObjects::Add(spawn, model, reader, &objects, client.liquidTypes))
-            {
-                stats.gameObjects++;
-            }
-            else
-            {
-                stats.gameObjectsMissing++;
-                LogD("[", mapName, "] game object display ", spawn.displayId, " (", model, "): model not found");
-            }
-        }
-
-        objects.Clean();
-        map.geometry.Append(objects);
-        LogI(std::format("[{}] Game objects: {} added, {} without a model", mapName, stats.gameObjects,
-                         stats.gameObjectsMissing));
+                           return !model.empty()
+                                  && GameObjects::Add(spawn, model, reader, objects, client.liquidTypes);
+                       });
     }
 
-    stats.adts = static_cast<int>(adts.size());
-    stats.vertices = map.geometry.verts.size();
-    stats.triangles = map.geometry.tris.size();
-    stats.waterRects = map.water.rects.size();
-    stats.roadRects = map.roads.rects.size();
-    stats.cityRects = map.cities.rects.size();
-    stats.factionRects = map.factions.rects.size();
+    // WMOs/M2s of this map aren't needed anymore, free them before the memory hungry build.
+    return BuildMap(mapId, mapName, options, map, adts, stats, mapStart, [&reader]() { reader.Clear(); });
+}
 
-    if (map.geometry.verts.empty() || map.geometry.tris.empty())
+void LogExportSummary(const ExportReport& report, std::chrono::steady_clock::time_point exportStart)
+{
+    const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - exportStart).count();
+    const auto exported = std::count_if(report.maps.begin(), report.maps.end(), [](const auto& m) { return m.exported; });
+
+    if (report.failedMaps > 0)
     {
-        LogW("[", mapName, "] no geometry extracted, skipping");
+        LogE("Export finished with ", report.failedMaps, " failed map(s), ", exported, " exported, in ",
+             Logger::FormatDuration(seconds));
+    }
+    else
+    {
+        LogS("Export finished: ", exported, " map(s) exported in ", Logger::FormatDuration(seconds));
+    }
+}
+
+/// Everything read once from a TrinityCore data folder.
+struct TcClient
+{
+    std::filesystem::path dir;
+    std::unordered_map<int, TcData::MapFiles> maps;
+    std::unordered_map<unsigned int, LiquidType> liquidTypes; // from --liquid-types, else classic ids
+    AreaData areas;                                            // from --area-table
+    std::unordered_map<unsigned int, std::string> gameObjectModels; // GameObjectModels.dtree
+    std::unordered_map<int, std::vector<GameObjectSpawn>> gameObjects;
+};
+
+/// `.vmo` models of one map, each read once.
+class TcModelCache
+{
+    std::filesystem::path VmapsDir;
+    std::mutex Mutex;
+    std::unordered_map<std::string, std::shared_ptr<const TcData::WorldModel>> Models;
+
+public:
+    explicit TcModelCache(std::filesystem::path vmapsDir) : VmapsDir(std::move(vmapsDir)) {}
+
+    std::shared_ptr<const TcData::WorldModel> Get(const std::string& name)
+    {
+        {
+            std::lock_guard lock(Mutex);
+
+            if (const auto it = Models.find(name); it != Models.end())
+            {
+                return it->second;
+            }
+        }
+
+        // Names come from the data files: no way out of the vmaps folder.
+        std::shared_ptr<const TcData::WorldModel> model;
+
+        if (!name.empty() && name.find("..") == std::string::npos && name.find(':') == std::string::npos
+            && name.front() != '/' && name.front() != '\\')
+        {
+            if (auto parsed = TcData::ParseWorldModel(TcData::ReadFile(VmapsDir / name)))
+            {
+                model = std::make_shared<const TcData::WorldModel>(std::move(*parsed));
+            }
+        }
+
+        std::lock_guard lock(Mutex);
+        return Models.emplace(name, model).first->second;
+    }
+};
+
+/// Export one map from TrinityCore's extracted data.
+MapExportStats ExportTcMap(int mapId, const TcData::MapFiles& files, const ExportOptions& options,
+                           const TcClient& client)
+{
+    MapExportStats stats;
+    stats.mapId = static_cast<unsigned int>(mapId);
+    stats.name = std::format("Map{:04}", mapId);
+    const std::string& mapName = stats.name;
+    const auto mapStart = std::chrono::steady_clock::now();
+
+    if (options.skipExisting && std::filesystem::exists(options.outputDir / Anp::FileName(mapId)))
+    {
+        LogI("[", mapName, "] ", Anp::FileName(mapId), " exists, skipping");
         stats.skipped = true;
         return stats;
     }
 
-    // Detour tile grid aligned to the ADT grid: tile (x, y) = ADT (maxX - x, maxY - y).
-    int maxAdtX = 0;
-    int maxAdtY = 0;
+    const auto selected = [&](const std::pair<int, int>& tile) {
+        return options.tileX < 0 || (tile.first == options.tileX && tile.second == options.tileY);
+    };
 
-    for (const auto& adt : adts)
+    std::vector<AdtCoord> adts;
+
+    for (const auto& tile : files.mapTiles)
     {
-        maxAdtX = std::max(maxAdtX, adt.x);
-        maxAdtY = std::max(maxAdtY, adt.y);
+        if (selected(tile))
+        {
+            adts.push_back({tile.first, tile.second});
+        }
     }
 
-    dtNavMeshParams params{};
-    params.orig[0] = static_cast<float>(31 - maxAdtX) * TILESIZE;
-    params.orig[1] = 0.0f;
-    params.orig[2] = static_cast<float>(31 - maxAdtY) * TILESIZE;
-    params.tileWidth = TILESIZE;
-    params.tileHeight = TILESIZE;
-    params.maxTiles = WDT_MAP_SIZE * WDT_MAP_SIZE;
-    params.maxPolys = 1 << 20; // ignored with 64 bit poly refs, kept positive for 32 bit readers
+    MapData map;
+    const int totalAdts = static_cast<int>(adts.size());
+    std::atomic<int> invalidTiles{0};
 
-    std::vector<TileCoord> tiles;
-    tiles.reserve(adts.size());
+    LogI(std::format("[{}] Map {}: reading {} terrain tiles and the models of {} vmap tiles", mapName, mapId, totalAdts,
+                     files.vmapTiles.size()));
 
-    for (const auto& adt : adts)
+#pragma omp parallel for schedule(dynamic, 1)
+    for (int i = 0; i < totalAdts; ++i)
     {
-        tiles.push_back({maxAdtX - adt.x, maxAdtY - adt.y, adt.x, adt.y});
+        const AdtCoord coord = adts[static_cast<size_t>(i)];
+        const auto path = TcData::TileFile(client.dir, mapId, coord.x, coord.y, false);
+        const auto tile = TcData::ParseMapTile(TcData::ReadFile(path), coord.x, coord.y);
+
+        if (!tile)
+        {
+            LogW("[", mapName, "] Invalid or old .map file (extract again with TrinityCore master's mapextractor): ",
+                 path.string());
+            invalidTiles++;
+            continue;
+        }
+
+        Structure geometry;
+        TcData::AddMapTile(*tile, &geometry, &map.water, &map.cities, &map.factions, client.areas.cities,
+                           client.areas.factions);
+        geometry.Clean();
+
+        const std::lock_guard lock(map.geometry.mutex);
+        map.geometry.Append(geometry);
     }
 
-    map.water.BuildSpatialIndex();
-    map.roads.BuildSpatialIndex();
-    map.cities.BuildSpatialIndex();
-    map.factions.BuildSpatialIndex();
-
-    LogI(std::format("[{}] Geometry: {} verts, {} tris | Water: {} | Roads: {} | Cities: {} | Factions: {}", mapName,
-                     stats.vertices, stats.triangles, stats.waterRects, stats.roadRects, stats.cityRects,
-                     stats.factionRects));
-
-    // WMOs/M2s of this map aren't needed anymore, free them before the memory hungry build.
-    reader.Clear();
-
-    TileBuildConfig buildConfig = options.buildConfig;
-    buildConfig.debugBmp = buildConfig.debugBmp || options.debug;
-
-    Anp::AnpWriter writer(static_cast<int>(mapId), params);
-    AdtTileProcessor processor(&writer, options.outputDir, mapName, buildConfig);
-    processor.Process(&map.geometry, tiles, &map.water, &map.roads, &map.factions, &map.cities);
-
-    stats.tilesBuilt = processor.GetStats().built.load();
-    stats.tilesFailed = processor.GetStats().failed.load();
-    stats.failed = stats.tilesFailed > 0;
-
-    if (writer.GetTileCount() == 0)
+    // Model spawns: every spawn is listed in each tile it overlaps, add it once.
+    std::vector<TcData::ModelSpawn> spawns;
     {
-        LogW("[", mapName, "] no navmesh tiles were built, nothing saved");
-        stats.skipped = !stats.failed;
-        return stats;
+        std::unordered_set<uint32_t> seen;
+
+        for (const auto& tile : files.vmapTiles)
+        {
+            if (!selected(tile))
+            {
+                continue;
+            }
+
+            for (auto& spawn : TcData::ParseTileSpawns(
+                     TcData::ReadFile(TcData::TileFile(client.dir, mapId, tile.first, tile.second, true))))
+            {
+                if (seen.insert(spawn.id).second)
+                {
+                    spawns.push_back(std::move(spawn));
+                }
+            }
+        }
     }
 
-    if (!writer.Save(options.outputDir))
+    TcModelCache models(client.dir / "vmaps");
+    std::atomic<size_t> wmos{0}, doodads{0}, missing{0};
+
+#pragma omp parallel for schedule(dynamic, 16)
+    for (int i = 0; i < static_cast<int>(spawns.size()); ++i)
     {
-        LogE("[", mapName, "] failed to save ", Anp::FileName(static_cast<int>(mapId)));
-        stats.failed = true;
-        return stats;
+        const TcData::ModelSpawn& spawn = spawns[static_cast<size_t>(i)];
+        const auto model = models.Get(spawn.name);
+
+        if (!model)
+        {
+            missing++;
+            continue;
+        }
+
+        (model->isM2 ? doodads : wmos)++;
+        const auto rotation = TcData::SpawnRotation(spawn.rot);
+        Structure geometry;
+        TcData::AddWorldModel(
+            *model, [&](const Vector3& v) { return TcData::SpawnToWow(spawn, rotation, v); }, &geometry,
+            model->isM2 ? DOODAD : WMO, client.liquidTypes);
+        geometry.Clean();
+
+        const std::lock_guard lock(map.geometry.mutex);
+        map.geometry.Append(geometry);
     }
 
-    stats.exported = true;
+    stats.wmoPlacements = wmos;
+    stats.doodadPlacements = doodads;
 
-    const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - mapStart).count();
-    LogS(std::format("[{}] Saved {} ({} tiles, {:.1f} MB) in {}", mapName, Anp::FileName(static_cast<int>(mapId)),
-                     writer.GetTileCount(), writer.GetStoredBytes() / (1024.0 * 1024.0),
-                     Logger::FormatDuration(seconds)));
+    if (missing > 0)
+    {
+        LogW(std::format("[{}] {} of {} model spawns without a readable .vmo file", mapName, missing.load(),
+                         spawns.size()));
+    }
+
+    if (adts.empty())
+    {
+        // Dungeons and raids: models only.
+        if (map.geometry.verts.empty())
+        {
+            LogD("[", mapName, "] no terrain and no models, skipping");
+            stats.skipped = true;
+            return stats;
+        }
+
+        stats.wmoOnly = true;
+        adts = AdtsCoveringGeometry(map.geometry);
+    }
+
+    if (const auto it = client.gameObjects.find(mapId); it != client.gameObjects.end())
+    {
+        AddGameObjects(it->second, adts, options, mapName, map, stats,
+                       [&](const GameObjectSpawn& spawn, Structure* objects) {
+                           std::string name = spawn.model;
+
+                           if (name.empty())
+                           {
+                               const auto model = client.gameObjectModels.find(spawn.displayId);
+                               name = model != client.gameObjectModels.end() ? model->second : std::string();
+                           }
+
+                           const auto model = models.Get(name);
+
+                           if (!model)
+                           {
+                               return false;
+                           }
+
+                           const Matrix4x4 transform = GameObjects::SpawnTransform(spawn);
+                           TcData::AddWorldModel(
+                               *model, [&](const Vector3& v) { return transform.Transform(v); }, objects, DOODAD,
+                               client.liquidTypes);
+                           return true;
+                       });
+    }
+
+    stats = BuildMap(static_cast<unsigned int>(mapId), mapName, options, map, adts, stats, mapStart, []() {});
+    stats.failed = stats.failed || invalidTiles > 0;
     return stats;
+}
+
+/// Export from a TrinityCore data folder (`--tc-data`).
+ExportReport RunTcExport(const ExportOptions& options)
+{
+    ExportReport report;
+    TcClient client;
+    client.dir = options.tcDataDir;
+
+    std::error_code ec;
+
+    if (!std::filesystem::is_directory(client.dir / "maps", ec)
+        && !std::filesystem::is_directory(client.dir / "vmaps", ec))
+    {
+        LogE("No maps or vmaps folder in \"", client.dir.string(), "\" (TrinityCore's extractors write them)");
+        return report;
+    }
+
+    try
+    {
+        std::filesystem::create_directories(options.outputDir);
+    }
+    catch (const std::filesystem::filesystem_error& e)
+    {
+        LogE("Filesystem error: ", e.what());
+        return report;
+    }
+
+    LogI("TrinityCore data: \"", client.dir.string(), "\"");
+    client.maps = TcData::ListMaps(client.dir);
+
+    if (client.maps.empty())
+    {
+        LogE("No .map or .vmtile files in \"", client.dir.string(), "\"");
+        return report;
+    }
+
+    if (!options.liquidTypeCsv.empty())
+    {
+        client.liquidTypes = LoadLiquidTypesCsv(options.liquidTypeCsv);
+    }
+
+    if (!options.areaTableCsv.empty())
+    {
+        client.areas = LoadAreaDataCsv(options.areaTableCsv);
+    }
+    else
+    {
+        LogW("No --area-table: faction and city areas will be unavailable");
+    }
+
+    if (!options.gameObjects.empty())
+    {
+        size_t invalid = 0;
+        const auto spawns = GameObjects::ReadSpawns(options.gameObjects, &invalid);
+
+        for (const GameObjectSpawn& spawn : spawns)
+        {
+            client.gameObjects[spawn.mapId].push_back(spawn);
+        }
+
+        client.gameObjectModels =
+            TcData::ParseGameObjectModels(TcData::ReadFile(client.dir / "vmaps" / "GameObjectModels.dtree"));
+        LogI(std::format("Game objects: {} spawns from \"{}\" ({} invalid lines), {} models in GameObjectModels.dtree",
+                         spawns.size(), options.gameObjects.string(), invalid, client.gameObjectModels.size()));
+    }
+
+    report.setupOk = true;
+    std::vector<int> ids;
+
+    for (const auto& entry : client.maps)
+    {
+        if (options.mapIds.empty()
+            || std::find(options.mapIds.begin(), options.mapIds.end(), entry.first) != options.mapIds.end())
+        {
+            ids.push_back(entry.first);
+        }
+    }
+
+    std::sort(ids.begin(), ids.end());
+
+    for (const int id : options.mapIds)
+    {
+        if (!client.maps.contains(id))
+        {
+            LogW("Map ", id, " has no files in \"", client.dir.string(), "\"");
+        }
+    }
+
+    const auto exportStart = std::chrono::steady_clock::now();
+
+    for (const int id : ids)
+    {
+        MapExportStats stats;
+
+        try
+        {
+            stats = ExportTcMap(id, client.maps.at(id), options, client);
+        }
+        catch (const std::exception& e)
+        {
+            LogE("[Map", id, "] export failed: ", e.what());
+            stats.mapId = static_cast<unsigned int>(id);
+            stats.failed = true;
+        }
+
+        report.failedMaps += stats.failed ? 1 : 0;
+        report.maps.push_back(std::move(stats));
+    }
+
+    LogExportSummary(report, exportStart);
+    return report;
 }
 } // namespace
 
@@ -466,6 +985,20 @@ std::filesystem::path ResolveDataDir(const std::filesystem::path& wowDir)
     }
 
     return wowDir;
+}
+
+std::vector<std::pair<unsigned int, std::string>> ListTcMaps(const std::filesystem::path& tcDataDir)
+{
+    std::vector<std::pair<unsigned int, std::string>> maps;
+
+    for (const auto& [id, files] : TcData::ListMaps(tcDataDir))
+    {
+        maps.emplace_back(static_cast<unsigned int>(id), std::format("{} terrain tiles, {} vmap tiles",
+                                                                     files.mapTiles.size(), files.vmapTiles.size()));
+    }
+
+    std::sort(maps.begin(), maps.end());
+    return maps;
 }
 
 std::vector<std::pair<unsigned int, std::string>> ListMaps(const std::filesystem::path& wowDir)
@@ -494,6 +1027,11 @@ std::vector<std::pair<unsigned int, std::string>> ListMaps(const std::filesystem
 
 ExportReport RunExport(const ExportOptions& options)
 {
+    if (!options.tcDataDir.empty())
+    {
+        return RunTcExport(options);
+    }
+
     ExportReport report;
     const auto dataDir = ResolveDataDir(options.wowDir);
 
@@ -597,18 +1135,6 @@ ExportReport RunExport(const ExportOptions& options)
         reader.Clear();
     }
 
-    const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - exportStart).count();
-    const auto exported = std::count_if(report.maps.begin(), report.maps.end(), [](const auto& m) { return m.exported; });
-
-    if (report.failedMaps > 0)
-    {
-        LogE("Export finished with ", report.failedMaps, " failed map(s), ", exported, " exported, in ",
-             Logger::FormatDuration(seconds));
-    }
-    else
-    {
-        LogS("Export finished: ", exported, " map(s) exported in ", Logger::FormatDuration(seconds));
-    }
-
+    LogExportSummary(report, exportStart);
     return report;
 }

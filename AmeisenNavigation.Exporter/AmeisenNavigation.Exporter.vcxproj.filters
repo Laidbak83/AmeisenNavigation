@@ -121,6 +121,7 @@
     </ClInclude>
     <ClInclude Include="src\Processors\OffMeshBuilder.hpp" />
     <ClInclude Include="src\Wow\GameObjects.hpp" />
+    <ClInclude Include="src/Wow/TcData.hpp" />
   </ItemGroup>
   <ItemGroup>
     <None Include="src\Utils\xxhash\LICENSE" />

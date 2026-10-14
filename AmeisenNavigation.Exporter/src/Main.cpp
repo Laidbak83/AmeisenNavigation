@@ -21,15 +21,19 @@ struct CommandLine
 void PrintUsage()
 {
     std::printf(
-        "Usage: AmeisenNavigation.Exporter --wow <path> --output <path> [options]\n\n"
-        "  -w, --wow <path>        WoW client folder (or its Data folder)\n"
+        "Usage: AmeisenNavigation.Exporter --wow <path> --output <path> [options]\n"
+        "       AmeisenNavigation.Exporter --tc-data <path> --output <path> [options]\n\n"
+        "  -w, --wow <path>        WoW client folder (or its Data folder), MPQ clients (up to WotLK)\n"
+        "      --tc-data <path>    Folder with TrinityCore's extracted maps/ and vmaps/ (recent clients, see README)\n"
+        "      --area-table <csv>  With --tc-data: AreaTable as CSV for faction and city areas\n"
+        "      --liquid-types <csv> With --tc-data: LiquidType as CSV for WMO liquid kinds\n"
         "  -o, --output <path>     Output folder for the .anp files\n"
         "  -m, --map <ids>         Only export these map ids (comma separated, e.g. 0,1,530,571)\n"
         "  -t, --tile <x,y>        Only export a single ADT (debugging)\n"
         "  -j, --threads <n>       Number of worker threads (default: all cores)\n"
         "  -s, --skip-existing     Don't rebuild maps whose .anp file already exists\n"
         "  -d, --debug             Debug logging and area debug images (<output>/debug)\n"
-        "  -l, --list-maps         List the maps in Map.dbc and exit\n"
+        "  -l, --list-maps         List the maps (Map.dbc, or the files in --tc-data) and exit\n"
         "  -g, --gameobjects <file> Add the collision of these game object spawns (see README)\n"
         "      --gameobject-exclude <types|none> Game object types left out [0,11,15,33,35: doors,\n"
         "                          transports, destructible buildings, trapdoors]\n"
@@ -97,6 +101,18 @@ bool ParseArguments(int argc, char** argv, CommandLine& cmd, bool& exitEarly)
         else if ((arg == "--wow" || arg == "-w") && hasValue)
         {
             options.wowDir = argv[++i];
+        }
+        else if (arg == "--tc-data" && hasValue)
+        {
+            options.tcDataDir = argv[++i];
+        }
+        else if (arg == "--area-table" && hasValue)
+        {
+            options.areaTableCsv = argv[++i];
+        }
+        else if (arg == "--liquid-types" && hasValue)
+        {
+            options.liquidTypeCsv = argv[++i];
         }
         else if ((arg == "--output" || arg == "-o") && hasValue)
         {
@@ -213,7 +229,7 @@ bool ParseArguments(int argc, char** argv, CommandLine& cmd, bool& exitEarly)
         }
     }
 
-    if (options.wowDir.empty() || (options.outputDir.empty() && !cmd.listMaps))
+    if ((options.wowDir.empty() && options.tcDataDir.empty()) || (options.outputDir.empty() && !cmd.listMaps))
     {
         LogE("Missing required arguments.");
         PrintUsage();
@@ -275,7 +291,8 @@ int main(int argc, char** argv)
 
     if (cmd.listMaps)
     {
-        const auto maps = ListMaps(cmd.options.wowDir);
+        const auto maps =
+            cmd.options.tcDataDir.empty() ? ListMaps(cmd.options.wowDir) : ListTcMaps(cmd.options.tcDataDir);
 
         for (const auto& [id, name] : maps)
         {

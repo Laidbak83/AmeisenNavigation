@@ -8,6 +8,10 @@
 #include <cmath>
 #include <filesystem>
 #include <format>
+#include <fstream>
+#include <functional>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -36,4 +40,5 @@
 #include "Wow/GameObjects.hpp"
 #include "Wow/LiquidType.hpp"
 #include "Wow/RoadDetector.hpp"
+#include "Wow/TcData.hpp"
 #include "Wow/Wdt.hpp"
