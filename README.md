@@ -97,6 +97,10 @@ AmeisenNavigation.Exporter --wow <WoW folder> --output <mesh folder> [options]
   -s, --skip-existing  Don't rebuild maps whose .anp file already exists (resume an interrupted export)
   -d, --debug          Debug logging + area debug images (<output>/debug/area_<map>_<x>_<y>.bmp)
   -l, --list-maps      List the maps in Map.dbc
+      --climb <h>      Highest step walked up without jumping (default 1.0 yards), obstacles above it block
+      --radius <r>     Agent radius, distance kept from walls (default 0.6)
+      --height <h>     Agent height, lower ceilings block (default 2.0)
+      --slope <deg>    Steepest walkable slope (default 55)
 ```
 
 The exit code is `0` on success, `1` if the client data couldn't be read and `2` if maps failed to build.
@@ -109,6 +113,10 @@ extracts terrain, liquids, WMOs and doodads, and builds one Detour tile per ADT:
 - WMO-only maps (most dungeons and raids) are built from the WDT's global WMO.
 - Liquids come from MH2O (WotLK, sloped surfaces included) with an MCLQ fallback for older data.
 - Tiles that would exceed Detour's 65535 vertex limit are automatically rebuilt with coarser settings.
+- Obstacles: WMO triangles collide like in the client (collision flag, or rendered and not a detail), M2 collision
+  meshes are read for every model version (vanilla/TBC headers, WotLK, chunked MD21). The default climb (1.0 yard)
+  makes fences from about 1.05 yards on block the way: a path never leads over an obstacle the bot can't step over
+  (see `tests/E2EObstacleTests.cpp` for fences, stairs, ledges, narrow passages and low ceilings).
 - Area ids (see `AmeisenNavigation.Pack/src/AnpFormat.hpp`) come in {neutral, Alliance, Horde} triplets for ground,
   road, city, WMO, doodad, water, ocean, lava and slime.
 

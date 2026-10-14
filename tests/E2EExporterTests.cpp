@@ -10,6 +10,7 @@
 #include "Exporter.hpp"
 #include "TestWorld.hpp"
 #include "WowDataBuilder.hpp"
+#include "Wow/AdtChunkExtractor.hpp"
 
 // Full exporter run on synthetic client data: MPQs (incl. a locale archive and a patch overriding an ADT)
 // -> DBCs, WDT, ADT terrain/liquid/textures/areas, WMOs, M2s -> .anp -> navigation queries.
@@ -598,4 +599,50 @@ TEST_CASE(Exporter_BadInputFailsCleanly)
     std::filesystem::create_directories(emptyDir);
     options.wowDir = emptyDir;
     CHECK(!RunExport(options).setupOk);
+}
+
+TEST_CASE(Wmo_CollisionFacesFollowTheClient)
+{
+    CHECK(IsWmoCollisionFace(WMO_FACE_RENDER));                                 // plain wall
+    CHECK(IsWmoCollisionFace(WMO_FACE_COLLISION));                              // invisible collision
+    CHECK(IsWmoCollisionFace(WMO_FACE_DETAIL | WMO_FACE_COLLISION));            // solid detail (railing)
+    CHECK(IsWmoCollisionFace(WMO_FACE_DETAIL | WMO_FACE_COLLISION | WMO_FACE_RENDER));
+    CHECK(!IsWmoCollisionFace(WMO_FACE_DETAIL | WMO_FACE_RENDER));              // decoration only
+    CHECK(!IsWmoCollisionFace(0x00));                                           // neither: no wall
+    CHECK(!IsWmoCollisionFace(0x10));                                           // hint
+    CHECK(!IsWmoCollisionFace(0x02));                                           // no camera collision only
+}
+
+TEST_CASE(M2_CollisionOfEveryVersion)
+{
+    std::vector<Vector3> verts;
+    std::vector<uint16_t> indices;
+    WowData::AddBox(verts, indices, {-1.0f, -0.05f, 0.0f}, {1.0f, 0.05f, 1.5f}); // a fence panel
+
+    for (const auto& [version, chunked] : {std::pair{256u, false}, std::pair{263u, false}, std::pair{264u, false},
+                                           std::pair{274u, true}})
+    {
+        WowData::Bytes data = WowData::MakeM2(verts, indices, version, chunked);
+        M2 m2{data.data(), static_cast<unsigned int>(data.size())};
+        REQUIRE(m2.IsValid());
+        CHECK(m2.IsCollideable());
+        CHECK_EQ(m2.Version(), version);
+        CHECK_EQ(m2.Collision().countBoundingVertices, static_cast<unsigned int>(verts.size()));
+        CHECK_EQ(m2.Collision().countBoundingTriangles, static_cast<unsigned int>(indices.size()));
+        CHECK(m2.Vertex(7) == verts[7]);
+        CHECK_EQ(m2.Index(5), indices[5]);
+
+        // Reading a classic file with the WotLK layout (or the other way round) would find nonsense.
+        data.resize(data.size() - 1);
+        M2 truncated{data.data(), static_cast<unsigned int>(data.size())};
+        CHECK(!truncated.IsValid() || truncated.Collision().countBoundingNormals > 0);
+    }
+
+    // Not an M2, or too short for the header.
+    WowData::Bytes junk(16, 0);
+    std::memcpy(junk.data(), "MD21", 4);
+    const M2 notMd20{junk.data(), static_cast<unsigned int>(junk.size())};
+    const M2 tooShort{junk.data(), 6};
+    CHECK(!notMd20.IsValid());
+    CHECK(!tooShort.IsValid());
 }

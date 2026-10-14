@@ -30,6 +30,11 @@ void PrintUsage()
         "  -d, --debug             Debug logging and area debug images (<output>/debug)\n"
         "  -l, --list-maps         List the maps in Map.dbc and exit\n"
         "  -h, --help              Show this help\n\n"
+        "Agent (yards, degrees), defaults in brackets:\n"
+        "      --climb <h>         Highest step walked up without jumping [1.0], obstacles above it block\n"
+        "      --radius <r>        Agent radius, distance kept from walls [0.6]\n"
+        "      --height <h>        Agent height, lower ceilings block [2.0]\n"
+        "      --slope <deg>       Steepest walkable slope [55]\n\n"
         "Example: AmeisenNavigation.Exporter -w \"C:\\WoW\" -o \"C:\\meshes\" -m 0,1 -j 8\n");
 }
 
@@ -37,6 +42,20 @@ bool ParseInt(std::string_view s, int& out) noexcept
 {
     const auto [ptr, ec] = std::from_chars(s.data(), s.data() + s.size(), out);
     return ec == std::errc() && ptr == s.data() + s.size();
+}
+
+bool ParseFloat(std::string_view s, float& out, float min, float max) noexcept
+{
+    float value = 0.0f;
+    const auto [ptr, ec] = std::from_chars(s.data(), s.data() + s.size(), value);
+
+    if (ec != std::errc() || ptr != s.data() + s.size() || !(value >= min && value <= max))
+    {
+        return false;
+    }
+
+    out = value;
+    return true;
 }
 
 /// Returns false (after printing the reason) if the arguments are invalid.
@@ -107,6 +126,21 @@ bool ParseArguments(int argc, char** argv, CommandLine& cmd, bool& exitEarly)
                 || options.tileY < 0 || options.tileY >= 64)
             {
                 LogE("Invalid --tile value: ", tile, " (expected x,y with 0 <= x,y < 64)");
+                return false;
+            }
+        }
+        else if ((arg == "--climb" || arg == "--radius" || arg == "--height" || arg == "--slope") && hasValue)
+        {
+            auto& build = options.buildConfig;
+            const std::string_view value = argv[++i];
+            const bool ok = arg == "--climb"    ? ParseFloat(value, build.agentClimb, 0.1f, 5.0f)
+                            : arg == "--radius" ? ParseFloat(value, build.agentRadius, 0.1f, 5.0f)
+                            : arg == "--height" ? ParseFloat(value, build.agentHeight, 0.5f, 10.0f)
+                                                : ParseFloat(value, build.walkableSlopeAngle, 10.0f, 85.0f);
+
+            if (!ok)
+            {
+                LogE("Invalid ", arg, " value: ", value);
                 return false;
             }
         }

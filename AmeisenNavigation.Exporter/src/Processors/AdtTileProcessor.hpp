@@ -70,7 +70,7 @@ struct TileBuildConfig
     float walkableSlopeAngle = 55.0f;
     float agentHeight = 2.0f;
     float agentRadius = 0.6f;
-    float agentClimb = 1.2f;
+    float agentClimb = 1.0f; // highest step walked up without jumping (fences from ~1.05 yards on block)
     int minRegionSize = 10;          // in cells (squared for the area)
     int mergeRegionSize = 25;        // in cells (squared for the area)
     float maxEdgeLength = 12.0f;     // world units

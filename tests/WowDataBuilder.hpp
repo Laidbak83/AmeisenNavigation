@@ -391,15 +391,17 @@ inline Bytes MakeWmoRoot(uint32_t groupCount)
     return out;
 }
 
-inline Bytes MakeWmoGroup(const std::vector<Vector3>& verts, const std::vector<uint16_t>& indices)
+/// faceFlags: MOPY flags per triangle (default: collidable render faces).
+inline Bytes MakeWmoGroup(const std::vector<Vector3>& verts, const std::vector<uint16_t>& indices,
+                          const std::vector<uint8_t>& faceFlags = {})
 {
     Bytes out = Mver(17);
 
     Bytes mopy;
     for (size_t t = 0; t < indices.size() / 3; ++t)
     {
-        mopy.push_back(0x20); // collidable render face
-        mopy.push_back(0);    // material
+        mopy.push_back(t < faceFlags.size() ? faceFlags[t] : 0x20);
+        mopy.push_back(0); // material
     }
 
     Bytes movi;
@@ -425,39 +427,53 @@ inline Bytes MakeWmoGroup(const std::vector<Vector3>& verts, const std::vector<u
     return out;
 }
 
-/// M2 with a collision mesh (the only part the exporter uses).
-inline Bytes MakeM2(const std::vector<Vector3>& verts, const std::vector<uint16_t>& indices)
+/// M2 with a collision mesh (the only part the exporter uses). version < 264 writes the pre-WotLK header (20 more
+/// bytes before the collision fields), chunked wraps it in an MD21 chunk like Legion+ clients.
+inline Bytes MakeM2(const std::vector<Vector3>& verts, const std::vector<uint16_t>& indices, uint32_t version = 264,
+                    bool chunked = false)
 {
-    MD20 header{};
-    std::memcpy(header.magic, "MD20", 4);
-    header.size = 264; // version
-
+    const size_t headerSize = version < M2_VERSION_WOTLK ? M2_COLLISION_OFFSET_CLASSIC + sizeof(M2Collision)
+                                                         : M2_COLLISION_OFFSET_WOTLK + sizeof(M2Collision);
+    const auto base = static_cast<uint32_t>(headerSize);
+    M2Collision collision{};
     Bytes body;
-    const auto base = static_cast<uint32_t>(sizeof(MD20));
 
-    header.countBoundingVertices = static_cast<uint32_t>(verts.size());
-    header.offsetBoundingVertices = base;
+    collision.countBoundingVertices = static_cast<uint32_t>(verts.size());
+    collision.offsetBoundingVertices = base;
     for (const auto& v : verts)
         Put(body, v);
 
-    header.countBoundingTriangles = static_cast<uint32_t>(indices.size());
-    header.offsetBoundingTriangles = base + static_cast<uint32_t>(body.size());
+    collision.countBoundingTriangles = static_cast<uint32_t>(indices.size());
+    collision.offsetBoundingTriangles = base + static_cast<uint32_t>(body.size());
     for (const uint16_t i : indices)
         Put(body, i);
 
     while (body.size() % 4)
         body.push_back(0);
 
-    header.countBoundingNormals = static_cast<uint32_t>(indices.size() / 3);
-    header.offsetBoundingNormals = base + static_cast<uint32_t>(body.size());
+    collision.countBoundingNormals = static_cast<uint32_t>(indices.size() / 3);
+    collision.offsetBoundingNormals = base + static_cast<uint32_t>(body.size());
     for (size_t i = 0; i < indices.size() / 3; ++i)
         Put(body, Vector3(0, 0, 1));
 
-    header.boundingRadius = 10.0f;
+    collision.boundingRadius = 10.0f;
 
-    Bytes out;
-    Put(out, header);
-    PutBytes(out, body);
+    Bytes md20(headerSize - sizeof(M2Collision), 0);
+    std::memcpy(md20.data(), "MD20", 4);
+    std::memcpy(md20.data() + 4, &version, 4);
+    Put(md20, collision);
+    PutBytes(md20, body);
+
+    if (!chunked)
+    {
+        return md20;
+    }
+
+    Bytes out(8);
+    std::memcpy(out.data(), "MD21", 4);
+    const auto size = static_cast<uint32_t>(md20.size());
+    std::memcpy(out.data() + 4, &size, 4);
+    PutBytes(out, md20);
     return out;
 }
 

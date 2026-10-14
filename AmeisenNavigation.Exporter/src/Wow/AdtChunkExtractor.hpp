@@ -364,26 +364,38 @@ inline void AddM2Collision(const M2* m2, const Matrix4x4& transform, Structure* 
         return;
     }
 
-    const MD20* md20 = m2->Md20();
+    const M2Collision collision = m2->Collision();
 
     std::vector<Vector3> verts;
-    verts.reserve(md20->countBoundingVertices);
+    verts.reserve(collision.countBoundingVertices);
 
-    for (unsigned int d = 0; d < md20->countBoundingVertices; ++d)
+    for (unsigned int d = 0; d < collision.countBoundingVertices; ++d)
     {
-        verts.push_back(transform.Transform(*m2->Vertex(d)).ToRDCoords());
+        verts.push_back(transform.Transform(m2->Vertex(d)).ToRDCoords());
     }
 
     AppendMesh(
-        structure, verts, md20->countBoundingTriangles / 3,
+        structure, verts, collision.countBoundingTriangles / 3,
         [&](unsigned int t, unsigned int& a, unsigned int& b, unsigned int& c) {
-            const unsigned short* tri = m2->Tri(static_cast<size_t>(t) * 3);
-            a = tri[0];
-            b = tri[1];
-            c = tri[2];
+            a = m2->Index(static_cast<size_t>(t) * 3);
+            b = m2->Index(static_cast<size_t>(t) * 3 + 1);
+            c = m2->Index(static_cast<size_t>(t) * 3 + 2);
             return true;
         },
         area);
+}
+
+/// MOPY flags of WMO group triangles.
+constexpr unsigned char WMO_FACE_DETAIL = 0x04;
+constexpr unsigned char WMO_FACE_COLLISION = 0x08;
+constexpr unsigned char WMO_FACE_RENDER = 0x20;
+
+/// A WMO triangle collides if it is flagged as collision, or rendered and not a detail (TrinityCore's vmap
+/// extractor uses the same rule, it matches what the client collides with). Faces with neither (portals, hints)
+/// would be phantom walls, detail faces flagged as collision (railings, small solid details) are real obstacles.
+constexpr bool IsWmoCollisionFace(unsigned char flags) noexcept
+{
+    return (flags & WMO_FACE_COLLISION) != 0 || ((flags & WMO_FACE_RENDER) != 0 && (flags & WMO_FACE_DETAIL) == 0);
 }
 
 /// Extract one WMO placement (solid + liquid + doodads of the placement's doodad set).
@@ -440,8 +452,7 @@ inline void ExtractWmoPlacement(const MODF::Entry& entry, const char* wmoRootFil
             AppendMesh(
                 structure, verts, triCount,
                 [&](unsigned int t, unsigned int& a, unsigned int& b, unsigned int& c) {
-                    // Skip non-collidable render-only polygons (F_DETAIL/F_NOCOLLIDE style materials).
-                    if ((mopy->data[t].flags & 0x04) != 0 && mopy->data[t].materials != 0xFF)
+                    if (!IsWmoCollisionFace(mopy->data[t].flags))
                     {
                         return false;
                     }

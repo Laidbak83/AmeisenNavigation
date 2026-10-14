@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Exporter: obstacles
+
+- **Climb 1.0 yard** (was 1.2): obstacles from about 1.05 yards on block the way. With 1.2 the navmesh led over
+  1.1 yard fences and bots ran into them (`tests/E2EObstacleTests.cpp` reproduces it). Stairs (0.45 yard risers),
+  narrow passages and low ceilings behave as before. `--climb`, `--radius`, `--height`, `--slope` tune the agent.
+- **WMO collision faces like the client** (TrinityCore's vmap extractor rule): a triangle collides if it is flagged
+  as collision, or rendered and not a detail. Before, faces with neither flag (portals, hints) were phantom walls
+  and solid detail faces (railings) were dropped.
+- **M2 collision of every version**: vanilla and TBC models (version < 264) have 20 more header bytes in front of the
+  collision fields, they were read with the WotLK layout (collision missing or garbage). Chunked MD21 models
+  (Legion+) are read too.
+
 ## 1.10.0.0 (protocol 3)
 
 Older clients keep working: every addition is a new message type, a new flag or an optional trailer.
