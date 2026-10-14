@@ -4,6 +4,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstring>
 #include <filesystem>
 #include <format>
 #include <limits>
@@ -30,6 +31,7 @@
 
 #include "AreaMarker.hpp"
 #include "BmpRenderer.hpp"
+#include "OffMeshBuilder.hpp"
 
 // ─────────────────────────────────────────────
 // AdtTileProcessor - builds one Detour tile per ADT from the merged map geometry.
@@ -80,6 +82,7 @@ struct TileBuildConfig
     int maxRetries = 3;                // coarser rebuilds when a tile exceeds Detour's vertex limit
     int maxTileVertices = 0xfffe;      // Detour's per tile vertex limit (only lowered by tests)
     bool debugBmp = false;             // write area debug images per tile
+    OffMeshLinkConfig links{};         // jump and drop links checked against the geometry
 };
 
 /// Recast context forwarding messages to the Logger. One instance per thread (log toggling is per context).
@@ -113,6 +116,8 @@ public:
         std::atomic<int> empty{0};
         std::atomic<int> failed{0};
         std::atomic<int> retried{0};
+        std::atomic<int> jumpLinks{0};
+        std::atomic<int> dropLinks{0};
     };
 
 private:
@@ -226,9 +231,11 @@ public:
 
         const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - buildStart).count();
         Logger::Log(Statistics.failed.load() > 0 ? Logger::Level::Warning : Logger::Level::Success,
-                    std::format("[{}] Built {} tiles ({} empty, {} failed, {} needed coarser settings) in {}",
+                    std::format("[{}] Built {} tiles ({} empty, {} failed, {} needed coarser settings), {} jump and "
+                                "{} drop links in {}",
                                 MapName, Statistics.built.load(), Statistics.empty.load(), Statistics.failed.load(),
-                                Statistics.retried.load(), Logger::FormatDuration(elapsed)));
+                                Statistics.retried.load(), Statistics.jumpLinks.load(), Statistics.dropLinks.load(),
+                                Logger::FormatDuration(elapsed)));
     }
 
 private:
@@ -467,9 +474,9 @@ private:
             for (int retry = 0; retry <= Config.maxRetries; ++retry)
             {
                 const Params p = MakeParams(retry);
-                const BuildResult result = BuildTileAttempt(s, tile, tbbMin, tbbMax, subBuckets, p, waterMap,
-                                                            roadMap, factionMap, cityMap, parallelSubTiles,
-                                                            Config.debugBmp && retry == 0);
+                const BuildResult result = BuildTileAttempt(
+                    s, tile, tbbMin, tbbMax, subBuckets, p, waterMap, roadMap, factionMap, cityMap, parallelSubTiles,
+                    Config.debugBmp && retry == 0, tileBuckets.Begin(tileIndex), tileBuckets.End(tileIndex));
 
                 if (result == BuildResult::Built)
                 {
@@ -520,7 +527,8 @@ private:
     BuildResult BuildTileAttempt(Structure& s, const TileCoord& tile, const float* tbbMin, const float* tbbMax,
                                  const Buckets& subBuckets, const Params& p, const WaterMap* waterMap,
                                  const RoadMap* roadMap, const FactionMap* factionMap, const CityMap* cityMap,
-                                 [[maybe_unused]] bool parallelSubTiles, bool debugBmp)
+                                 [[maybe_unused]] bool parallelSubTiles, bool debugBmp, const uint32_t* tileTrisBegin,
+                                 const uint32_t* tileTrisEnd)
     {
         const int subTileCount = p.subTilesPerAxis * p.subTilesPerAxis;
         std::vector<rcPolyMesh*> pmeshes(static_cast<size_t>(subTileCount), nullptr);
@@ -662,7 +670,13 @@ private:
 
         unsigned char* navData = nullptr;
         int navDataSize = 0;
-        const bool created = dtCreateNavMeshData(&params, &navData, &navDataSize);
+        bool created = dtCreateNavMeshData(&params, &navData, &navDataSize);
+
+        if (created && (Config.links.jumps || Config.links.drops))
+        {
+            AddOffMeshLinks(s, params, tbbMin, tbbMax, tileTrisBegin, tileTrisEnd, navData, navDataSize);
+        }
+
         cleanup();
 
         if (!created)
@@ -673,6 +687,84 @@ private:
         const bool stored = Writer->AddTile(navData, navDataSize);
         dtFree(navData);
         return stored ? BuildResult::Built : BuildResult::Failed;
+    }
+
+    /// Find jump/drop links on the finished tile and rebuild it with them. navData is replaced on success, left as
+    /// it is otherwise (dtCreateNavMeshData can't fail for the same mesh plus a few connections, but be safe).
+    void AddOffMeshLinks(const Structure& s, dtNavMeshCreateParams& params, const float* tbbMin, const float* tbbMax,
+                         const uint32_t* trisBegin, const uint32_t* trisEnd, unsigned char*& navData,
+                         int& navDataSize)
+    {
+        // The tile on its own as a navmesh: candidates come from its border edges.
+        NavMeshPtr mesh(dtAllocNavMesh());
+        dtNavMeshParams meshParams = Writer->GetParams();
+        meshParams.maxTiles = 1;
+        unsigned char* copy = static_cast<unsigned char*>(dtAlloc(static_cast<size_t>(navDataSize), DT_ALLOC_PERM));
+
+        if (!mesh || !copy || dtStatusFailed(mesh->init(&meshParams)))
+        {
+            dtFree(copy);
+            return;
+        }
+
+        std::memcpy(copy, navData, static_cast<size_t>(navDataSize));
+
+        if (dtStatusFailed(mesh->addTile(copy, navDataSize, DT_TILE_FREE_DATA, 0, nullptr)))
+        {
+            dtFree(copy);
+            return;
+        }
+
+        const GeometryColumns geometry(s, trisBegin, trisEnd, tbbMin, tbbMax);
+        const std::vector<OffMeshLink> links = OffMeshBuilder::FindLinks(
+            *mesh, geometry, Config.agentClimb, Config.agentHeight, tbbMin, tbbMax, Config.links);
+
+        if (links.empty())
+        {
+            return;
+        }
+
+        std::vector<float> verts;
+        std::vector<float> radius;
+        std::vector<unsigned short> flags;
+        std::vector<unsigned char> areas;
+        std::vector<unsigned char> dirs;
+        std::vector<unsigned int> userIds;
+        int jumps = 0;
+
+        for (const OffMeshLink& link : links)
+        {
+            verts.insert(verts.end(), link.start.pos, link.start.pos + 3);
+            verts.insert(verts.end(), link.end.pos, link.end.pos + 3);
+            radius.push_back(link.radius);
+            flags.push_back(link.flags);
+            areas.push_back(link.area);
+            dirs.push_back(link.bidirectional ? DT_OFFMESH_CON_BIDIR : 0);
+            userIds.push_back(link.userId);
+            jumps += link.userId == static_cast<unsigned int>(OffMeshLinkKind::JUMP) ? 1 : 0;
+        }
+
+        params.offMeshConVerts = verts.data();
+        params.offMeshConRad = radius.data();
+        params.offMeshConFlags = flags.data();
+        params.offMeshConAreas = areas.data();
+        params.offMeshConDir = dirs.data();
+        params.offMeshConUserID = userIds.data();
+        params.offMeshConCount = static_cast<int>(links.size());
+
+        unsigned char* withLinks = nullptr;
+        int withLinksSize = 0;
+
+        if (dtCreateNavMeshData(&params, &withLinks, &withLinksSize))
+        {
+            dtFree(navData);
+            navData = withLinks;
+            navDataSize = withLinksSize;
+            Statistics.jumpLinks.fetch_add(jumps, std::memory_order_relaxed);
+            Statistics.dropLinks.fetch_add(static_cast<int>(links.size()) - jumps, std::memory_order_relaxed);
+        }
+
+        params.offMeshConCount = 0;
     }
 
     /// Copy the sub-tile's terrain and water triangles into contiguous Recast index/area arrays.

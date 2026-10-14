@@ -119,6 +119,7 @@
     <ClInclude Include="src\Wow\RoadDetector.hpp">
       <Filter>Headerdateien</Filter>
     </ClInclude>
+    <ClInclude Include="src\Processors\OffMeshBuilder.hpp" />
   </ItemGroup>
   <ItemGroup>
     <None Include="src\Utils\xxhash\LICENSE" />

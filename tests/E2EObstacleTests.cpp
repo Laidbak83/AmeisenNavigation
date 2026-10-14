@@ -236,3 +236,69 @@ TEST_CASE(Obstacles_OldClimbWalkedOverLowFences)
     CHECK(Passable(nav, scene.lanes.at("fence 1.1")));
     CHECK(!Passable(nav, scene.lanes.at("fence 1.3")));
 }
+
+namespace {
+/// Path along a lane (jumps enabled with a cost when `jumps`), counting the jump and drop points.
+bool PassableWith(AmeisenNavigation& nav, const Lane& lane, bool jumps, int& jumpPoints, int& dropPoints,
+                  float startY = 0.0f, float startX = LANE_X0 + 5.0f, float endY = 0.0f, float endX = LANE_X1 - 5.0f)
+{
+    const AreaCost enableJumps[]{{AREA_OFFMESH_JUMP, 3.0f}};
+    REQUIRE(nav.GetClient(1)->ConfigureQueryFilter(ClientState::NORMAL,
+                                                   jumps ? std::span<const AreaCost>(enableJumps)
+                                                         : std::span<const AreaCost>()));
+    Path path(512);
+    std::vector<unsigned char> flags(512);
+    bool partial = true;
+
+    if (!nav.GetPath(1, MAP_ID, Wow(startX, startY, lane.center()), Wow(endX, endY, lane.center()), path, &partial,
+                     nullptr, flags.data()))
+    {
+        return false;
+    }
+
+    jumpPoints = 0;
+    dropPoints = 0;
+
+    for (int i = 0; i < path.pointCount; ++i)
+    {
+        jumpPoints += (flags[static_cast<size_t>(i)] & PATH_POINT_JUMP) ? 1 : 0;
+        dropPoints += (flags[static_cast<size_t>(i)] & PATH_POINT_DROP) ? 1 : 0;
+    }
+
+    return !partial;
+}
+} // namespace
+
+TEST_CASE(Obstacles_JumpAndDropLinksAreCheckedAgainstGeometry)
+{
+    const Scene& scene = Build(TileBuildConfig{}.agentClimb);
+    AmeisenNavigation nav = MakeNav(scene);
+    REQUIRE(nav.NewClient(1));
+    int jumps = 0;
+    int drops = 0;
+
+    // Fences between the climb and the jump height: a jump for bots that jump, blocked for the others.
+    for (const char* lane : {"fence 1.1", "fence 1.3"})
+    {
+        CHECK(!PassableWith(nav, scene.lanes.at(lane), false, jumps, drops));
+        CHECK(PassableWith(nav, scene.lanes.at(lane), true, jumps, drops));
+        CHECK_EQ(jumps, 1);
+    }
+
+    // Too high to jump over, a wall with a narrow gap, a wall between lanes: no link through them.
+    for (const char* lane : {"fence 1.6", "fence 2.2", "gap 1.0"})
+    {
+        CHECK(!PassableWith(nav, scene.lanes.at(lane), true, jumps, drops));
+    }
+
+    // Down from the ledge (3 yards): a drop, also without jumps. Not up again.
+    const Lane& ledge = scene.lanes.at("ledge");
+    CHECK(PassableWith(nav, ledge, false, jumps, drops, 3.0f, -40.0f, 0.0f, LANE_X0 + 5.0f));
+    CHECK_EQ(drops, 1);
+    CHECK(!PassableWith(nav, ledge, true, jumps, drops, 0.0f, LANE_X0 + 5.0f, 3.0f, -40.0f));
+
+    // Lanes stay separated: no link crosses the 5 yard walls (a walk into the neighbour lane would show up as a
+    // complete path to a point that is only reachable there).
+    const Lane& fence = scene.lanes.at("fence 2.2");
+    CHECK(!PassableWith(nav, fence, true, jumps, drops));
+}

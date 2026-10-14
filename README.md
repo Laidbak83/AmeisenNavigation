@@ -101,6 +101,8 @@ AmeisenNavigation.Exporter --wow <WoW folder> --output <mesh folder> [options]
       --radius <r>     Agent radius, distance kept from walls (default 0.6)
       --height <h>     Agent height, lower ceilings block (default 2.0)
       --slope <deg>    Steepest walkable slope (default 55)
+      --jump-height <h> Highest obstacle jumped over, 0 = no jump links (default 1.5)
+      --drop-height <h> Highest ledge dropped down, 0 = no drop links (default 10)
 ```
 
 The exit code is `0` on success, `1` if the client data couldn't be read and `2` if maps failed to build.
@@ -117,6 +119,12 @@ extracts terrain, liquids, WMOs and doodads, and builds one Detour tile per ADT:
   meshes are read for every model version (vanilla/TBC headers, WotLK, chunked MD21). The default climb (1.0 yard)
   makes fences from about 1.05 yards on block the way: a path never leads over an obstacle the bot can't step over
   (see `tests/E2EObstacleTests.cpp` for fences, stairs, ledges, narrow passages and low ceilings).
+- Jump and drop links (off-mesh connections) where the navmesh ends at an obstacle or a ledge, checked against the
+  geometry: a jump goes over an obstacle no higher than `--jump-height` above the takeoff (or a gap, or up onto
+  something up to 1.25 yards higher) with nothing else in the way up to head height, a drop goes down a ledge with
+  nothing in between. A wall between a balcony and the street never becomes a link. Links that would land in the
+  neighbouring tile are left out. The server reports them per point (`PATH_EX`); jumps are only used by clients that
+  enable them.
 - Area ids (see `AmeisenNavigation.Pack/src/AnpFormat.hpp`) come in {neutral, Alliance, Horde} triplets for ground,
   road, city, WMO, doodad, water, ocean, lava and slime.
 

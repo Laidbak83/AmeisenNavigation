@@ -60,6 +60,8 @@ inline TileBuildConfig FastBuildConfig()
     config.subTileSize = 64;
     config.minRegionSize = 2;
     config.mergeRegionSize = 8;
+    config.links.jumps = false; // the server tests add their own off-mesh links
+    config.links.drops = false;
     return config;
 }
 

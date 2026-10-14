@@ -10,6 +10,10 @@
 - **WMO collision faces like the client** (TrinityCore's vmap extractor rule): a triangle collides if it is flagged
   as collision, or rendered and not a detail. Before, faces with neither flag (portals, hints) were phantom walls
   and solid detail faces (railings) were dropped.
+- **Jump and drop links baked into the tiles**, checked against the source geometry (vertical profile between
+  takeoff and landing): jumps over obstacles up to 1.5 yards (`--jump-height`), over gaps and up onto things up to
+  1.25 yards, drops down ledges up to 10 yards (`--drop-height`). Walls, ceilings and taller obstacles in the way
+  reject a link. Jumps are excluded by the server's default filters, PATH_EX tells a bot where to jump.
 - **M2 collision of every version**: vanilla and TBC models (version < 264) have 20 more header bytes in front of the
   collision fields, they were read with the WotLK layout (collision missing or garbage). Chunked MD21 models
   (Legion+) are read too.

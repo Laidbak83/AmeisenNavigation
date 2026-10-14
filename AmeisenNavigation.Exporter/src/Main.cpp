@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <charconv>
 #include <cstdio>
 #include <string_view>
@@ -34,7 +35,9 @@ void PrintUsage()
         "      --climb <h>         Highest step walked up without jumping [1.0], obstacles above it block\n"
         "      --radius <r>        Agent radius, distance kept from walls [0.6]\n"
         "      --height <h>        Agent height, lower ceilings block [2.0]\n"
-        "      --slope <deg>       Steepest walkable slope [55]\n\n"
+        "      --slope <deg>       Steepest walkable slope [55]\n"
+        "      --jump-height <h>   Highest obstacle jumped over, 0 = no jump links [1.5]\n"
+        "      --drop-height <h>   Highest ledge dropped down, 0 = no drop links [10]\n\n"
         "Example: AmeisenNavigation.Exporter -w \"C:\\WoW\" -o \"C:\\meshes\" -m 0,1 -j 8\n");
 }
 
@@ -127,6 +130,29 @@ bool ParseArguments(int argc, char** argv, CommandLine& cmd, bool& exitEarly)
             {
                 LogE("Invalid --tile value: ", tile, " (expected x,y with 0 <= x,y < 64)");
                 return false;
+            }
+        }
+        else if ((arg == "--jump-height" || arg == "--drop-height") && hasValue)
+        {
+            auto& links = options.buildConfig.links;
+            float value = 0.0f;
+
+            if (!ParseFloat(argv[++i], value, 0.0f, 50.0f))
+            {
+                LogE("Invalid ", arg, " value: ", argv[i]);
+                return false;
+            }
+
+            if (arg == "--jump-height")
+            {
+                links.jumps = value > 0.0f;
+                links.maxJumpObstacle = value;
+                links.maxJumpUp = std::min(links.maxJumpUp, value);
+            }
+            else
+            {
+                links.drops = value > 0.0f;
+                links.maxDropHeight = value;
             }
         }
         else if ((arg == "--climb" || arg == "--radius" || arg == "--height" || arg == "--slope") && hasValue)

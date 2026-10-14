@@ -217,6 +217,7 @@
     <ClInclude Include="src\Wow\Wmo.hpp" />
     <ClInclude Include="src\Wow\WmoGroup.hpp" />
     <ClInclude Include="src\Utils\xxhash\xxhash.h" />
+    <ClInclude Include="src\Processors\OffMeshBuilder.hpp" />
   </ItemGroup>
   <ItemGroup>
     <None Include="src\Utils\xxhash\LICENSE" />
