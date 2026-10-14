@@ -25,14 +25,18 @@ public:
     explicit AnpQueryFilterProvider(float waterCost = 1.6f, float badLiquidCost = 4.0f, float roadCost = 0.75f,
                                     float factionDangerCost = 3.0f) noexcept
     {
+        // Jump links need a bot that jumps: excluded unless a client gives AREA_OFFMESH_JUMP a cost.
         const unsigned short includeFlags =
-            NAV_LAVA_SLIME | NAV_WATER | NAV_GROUND | NAV_ROAD | NAV_ALLIANCE | NAV_HORDE;
+            NAV_LAVA_SLIME | NAV_WATER | NAV_GROUND | NAV_ROAD | NAV_ALLIANCE | NAV_HORDE | NAV_DROP;
 
         for (int i = 0; i < ClientStateCount; ++i)
         {
             auto& filter = Filter(static_cast<ClientState>(i));
             filter.setIncludeFlags(includeFlags);
-            filter.setExcludeFlags(0);
+            filter.setExcludeFlags(NAV_JUMP);
+            filter.setAreaCost(AREA_OFFMESH_JUMP, 2.0f);
+            filter.setAreaCost(AREA_OFFMESH_DROP, 1.0f);
+            filter.setAreaCost(AREA_OFFMESH_LINK, 1.0f);
         }
 
         const Costs base{1.0f, roadCost, waterCost, badLiquidCost, 1.0f, 1.0f};

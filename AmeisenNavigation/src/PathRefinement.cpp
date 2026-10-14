@@ -412,14 +412,16 @@ void AmeisenNavigation::RefinePath(dtNavMeshQuery* query, const dtQueryFilter* f
 
 bool AmeisenNavigation::CalculateFollowPath(dtNavMeshQuery* query, const dtQueryFilter* filter,
                                             AmeisenNavClient& client, int mapId, const Vector3& startPosition,
-                                            const Vector3& endPosition, Path& path, bool* partial) noexcept
+                                            const Vector3& endPosition, Path& path, bool* partial,
+                                            dtPolyRef* straightPathRefs, unsigned char* straightPathFlags) noexcept
 {
     path.Clear();
     FollowState* state = client.GetFollowState();
 
     if (!state)
     {
-        return CalculateNormalPath(query, filter, client, startPosition, endPosition, path, nullptr, partial);
+        return CalculateNormalPath(query, filter, client, startPosition, endPosition, path, straightPathRefs, partial,
+                                   straightPathFlags);
     }
 
     Vector3 rdStart;
@@ -488,9 +490,10 @@ bool AmeisenNavigation::CalculateFollowPath(dtNavMeshQuery* query, const dtQuery
     }
 
     path.Clear();
-    const dtStatus status =
-        query->findStraightPath(corridor.getPos(), corridor.getTarget(), corridor.getPath(), corridor.getPathCount(),
-                                reinterpret_cast<float*>(path.points), nullptr, nullptr, &path.pointCount, path.maxSize);
+    const dtStatus status = query->findStraightPath(
+        corridor.getPos(), corridor.getTarget(), corridor.getPath(), corridor.getPathCount(),
+        reinterpret_cast<float*>(path.points), straightPathFlags, straightPathRefs, &path.pointCount,
+        std::min(path.maxSize, client.GetStraightPathRefBufferSize()));
 
     if (dtStatusFailed(status) || path.pointCount <= 0)
     {

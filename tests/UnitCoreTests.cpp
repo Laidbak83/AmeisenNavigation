@@ -125,7 +125,9 @@ TEST_CASE(FilterProvider_Tc335aCostsUseAreaIds)
     CHECK_NEAR(normal->getAreaCost(static_cast<int>(NavArea335a::MAGMA_SLIME)), 4.0f, 1e-6);
     CHECK_NEAR(normal->getAreaCost(static_cast<int>(NavArea335a::GROUND)), 1.0f, 1e-6);
     CHECK_NEAR(normal->getAreaCost(4), 1.0f, 1e-6); // flag value, not an area id
-    CHECK_EQ(normal->getExcludeFlags(), static_cast<unsigned short>(NavFlag335a::GROUND_STEEP));
+    // Steep ground and jump links are excluded, drop links included.
+    CHECK_EQ(normal->getExcludeFlags(), static_cast<unsigned short>(NavFlag335a::GROUND_STEEP) | NAV_JUMP);
+    CHECK((normal->getIncludeFlags() & NAV_DROP) != 0);
 
     const dtQueryFilter* dead = provider.Get(ClientState::DEAD);
     REQUIRE(dead != nullptr);

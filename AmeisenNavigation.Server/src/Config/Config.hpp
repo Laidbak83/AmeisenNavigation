@@ -28,6 +28,8 @@ struct AmeisenNavConfig
     float catmullRomSplineAlpha = 0.5f;
     float cornerRadius = 2.0f; // ROUND_CORNERS arc radius
     float wallMargin = 1.0f;   // AVOID_WALLS distance
+    float autoDropHeight = 0.0f; // one way drop links from ledges up to this height when a map loads (0 = off)
+    float autoDropReach = 2.0f;  // how far beyond a ledge a drop may land
     float badLiquidCost = 4.0f; // lava, slime
     float factionDangerCost = 3.0f;
     float randomPathMaxDistance = 1.0f;
@@ -55,6 +57,7 @@ struct AmeisenNavConfig
     std::string mmapsPath = "./meshes/";
 #endif
     std::string preloadMaps = ""; // comma separated map ids loaded at startup, e.g. "0,1,530,571"
+    std::string offMeshFile = "";    // off-mesh connections, TrinityCore offmesh.txt format (empty = none)
     std::string avoidZonesFile = ""; // REPORT_STUCK zones are kept in this file (empty = not persisted)
     std::string parentMaps = "";  // MMAP files of a child map fall back to its parent's: "child:parent,...", e.g. "2552:0"
 
@@ -353,6 +356,8 @@ private:
         return {
             {"bDebugLogging", std::ref(debugLogging)},
             {"bUseAnpFileFormat", std::ref(useAnpFileFormat)},
+            {"fAutoDropHeight", std::ref(autoDropHeight)},
+            {"fAutoDropReach", std::ref(autoDropReach)},
             {"fBadLiquidCost", std::ref(badLiquidCost)},
             {"fCatmullRomSplineAlpha", std::ref(catmullRomSplineAlpha)},
             {"fCornerRadius", std::ref(cornerRadius)},
@@ -379,6 +384,7 @@ private:
             {"sCustomMmtilePattern", std::ref(customMmtilePattern)},
             {"sIp", std::ref(ip)},
             {"sMmapsPath", std::ref(mmapsPath)},
+            {"sOffMeshFile", std::ref(offMeshFile)},
             {"sParentMaps", std::ref(parentMaps)},
             {"sPreloadMaps", std::ref(preloadMaps)},
         };

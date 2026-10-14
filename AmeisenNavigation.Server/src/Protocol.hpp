@@ -24,6 +24,8 @@
 ///   SET_AVOID_ZONES         -> bool, request: AvoidZonesHeader + zoneCount AvoidZoneData
 ///   STEER                   -> SteerResponse, request: SteerRequestHeader + unitCount SteerUnitData
 ///   REPORT_STUCK            -> bool, request: ReportStuckData
+///   PATH_EX                 -> PathExResponseHeader + pointCount Vector3 + pointCount uint8 PathPointFlags
+///                              (pointCount 0 on failure), request: like PATH (RANDOMIZE flag for random offsets)
 ///   unknown types           -> empty payload
 
 enum class MessageType : unsigned char
@@ -42,6 +44,7 @@ enum class MessageType : unsigned char
     SET_AVOID_ZONES,     // Replace the connection's avoid zones on a map
     STEER,               // Local steering: velocity for one tick avoiding units, zones and walls
     REPORT_STUCK,        // Report a position where the client got stuck (a zone every client avoids)
+    PATH_EX,             // Path with a flag per point (start/end, where to jump or drop, partial result)
 };
 
 enum class PathType
@@ -63,13 +66,14 @@ enum class PathRequestFlags : int
     SHORTCUT = 1 << 7,           // Skip corners wherever the navmesh allows a straight line
     ROUND_CORNERS = 1 << 8,      // Replace corners by arcs (fCornerRadius, iCornerPoints) around them
     FOLLOW = 1 << 9,             // PATH only: reuse the corridor of the connection's previous path
+    RANDOMIZE = 1 << 10,         // PATH_EX only: random offsets like RANDOM_PATH
 };
 
 /// Bumped whenever requests/responses are added or extended (reported by GET_CONFIG).
 ///   1: PATH ... CAST_RAY_EX
 ///   2: EXPLORE_POLY, PathRequestFlags::REQUIRE_COMPLETE, GET_CONFIG trailer
 ///   3: AVOID_WALLS, SHORTCUT, ROUND_CORNERS, FOLLOW, PathTuningData trailer, SET_AVOID_ZONES, STEER,
-///      REPORT_STUCK, CONFIGURE_FILTER cost 0 (forbid) / > 0 (allow areas excluded by default)
+///      REPORT_STUCK, PATH_EX, CONFIGURE_FILTER cost 0 (forbid) / > 0 (allow areas excluded by default)
 constexpr int PROTOCOL_VERSION = 3;
 
 constexpr bool HasFlag(int flags, PathRequestFlags flag) noexcept { return (flags & static_cast<int>(flag)) != 0; }
@@ -90,6 +94,18 @@ struct PathTuningData
     float cornerRadius;
     int cornerPoints;
     float stopDistance; // end this far before the target, at a point that sees it (0 = at the target)
+};
+
+/// PATH_EX response header.
+struct PathExResponseHeader
+{
+    int pointCount;
+    int resultFlags; // PathExResultFlags
+};
+
+enum PathExResultFlags : int
+{
+    PATH_RESULT_PARTIAL = 1 << 0, // the end isn't reachable, the path leads as close as possible
 };
 
 struct MoveRequestData
@@ -229,6 +245,7 @@ static_assert(sizeof(AvoidZonesHeader) == 8 && sizeof(AvoidZoneData) == 20);
 static_assert(sizeof(SteerRequestHeader) == 56 && offsetof(SteerRequestHeader, unitCount) == 52);
 static_assert(sizeof(SteerUnitData) == 28 && sizeof(SteerResponse) == 28);
 static_assert(sizeof(ReportStuckData) == 20);
+static_assert(sizeof(PathExResponseHeader) == 8);
 static_assert(sizeof(ConfigureFilterHeader) == 8 && offsetof(ConfigureFilterHeader, filterConfigCount) == 4);
 
 /// Maximum number of filter entries in one CONFIGURE_FILTER request (one per Detour area).

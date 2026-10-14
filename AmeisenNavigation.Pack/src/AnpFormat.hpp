@@ -70,7 +70,19 @@ enum TriFlag : unsigned char
     NAV_ROAD = 1 << 3,
     NAV_ALLIANCE = 1 << 4,
     NAV_HORDE = 1 << 5,
+    NAV_JUMP = 1 << 6, // off-mesh connection that needs a jump (excluded by the default filters)
+    NAV_DROP = 1 << 7, // off-mesh connection that walks off a ledge
 };
+
+/// Area ids of off-mesh connections, outside the terrain triplets. Used for ANP and MMAP navmeshes alike (TrinityCore
+/// doesn't use these ids), part of the wire/file format like the ids above.
+///   JUMP: over a low obstacle or a gap, the bot has to jump (PATH_EX tells where). Excluded by default, a client
+///         enables it with a CONFIGURE_FILTER cost > 0.
+///   DROP: off a ledge, walking on is enough (the character falls).
+///   LINK: custom connection (sOffMeshFile, e.g. TrinityCore's offmesh.txt).
+constexpr unsigned char AREA_OFFMESH_JUMP = 40;
+constexpr unsigned char AREA_OFFMESH_DROP = 41;
+constexpr unsigned char AREA_OFFMESH_LINK = 42;
 
 enum class AreaFaction : unsigned char
 {

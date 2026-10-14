@@ -5,6 +5,7 @@
 #include <cstring>
 #include <filesystem>
 #include <format>
+#include <algorithm>
 #include <functional>
 #include <span>
 #include <thread>
@@ -51,6 +52,7 @@ const char* MessageName(AnTcpMessageType type) noexcept
         case MessageType::SET_AVOID_ZONES: return "SetAvoidZones";
         case MessageType::STEER: return "Steer";
         case MessageType::REPORT_STUCK: return "ReportStuck";
+        case MessageType::PATH_EX: return "PathEx";
         default: return "Unknown";
     }
 }
@@ -80,6 +82,9 @@ NavServer::NavServer(const AmeisenNavConfig& config) : Cfg(config)
     settings.avoidZonesFile = Cfg.avoidZonesFile;
     settings.stuckZoneRadius = Cfg.stuckZoneRadius;
     settings.stuckZoneCost = Cfg.stuckZoneCost;
+    settings.offMeshFile = Cfg.offMeshFile;
+    settings.autoDropHeight = Cfg.autoDropHeight;
+    settings.autoDropReach = Cfg.autoDropReach;
 
     Navigation = std::make_unique<AmeisenNavigation>(settings);
     TcpServer = std::make_unique<AnTcpServer>(Cfg.ip, static_cast<unsigned short>(Cfg.port));
@@ -145,7 +150,8 @@ void NavServer::ValidateConfig(AmeisenNavConfig& config, std::vector<std::string
     {
         errors.push_back("iMaxPointPath has to be a value >= 2");
     }
-    else if (static_cast<size_t>(config.maxPointPath) * sizeof(Vector3) + 1 > ANTCP_MAX_RESPONSE_SIZE)
+    else if (sizeof(PathExResponseHeader) + static_cast<size_t>(config.maxPointPath) * (sizeof(Vector3) + 1) + 1
+             > ANTCP_MAX_RESPONSE_SIZE)
     {
         errors.push_back("iMaxPointPath is too large for a single response");
     }
@@ -232,6 +238,23 @@ void NavServer::ValidateConfig(AmeisenNavConfig& config, std::vector<std::string
     {
         warnings.push_back(std::format("fStuckZoneCost has to be within [1, {}], clamping", MAX_AVOID_ZONE_COST));
         config.stuckZoneCost = std::clamp(config.stuckZoneCost, 1.0f, MAX_AVOID_ZONE_COST);
+    }
+
+    if (!config.offMeshFile.empty() && !std::filesystem::is_regular_file(config.offMeshFile, ec))
+    {
+        warnings.push_back(std::format("sOffMeshFile not found: \"{}\"", config.offMeshFile));
+    }
+
+    if (config.autoDropHeight < 0.0f || config.autoDropHeight > 50.0f)
+    {
+        warnings.push_back("fAutoDropHeight has to be within [0, 50] (0 = off), clamping");
+        config.autoDropHeight = std::clamp(config.autoDropHeight, 0.0f, 50.0f);
+    }
+
+    if (config.autoDropReach < 0.5f || config.autoDropReach > 10.0f)
+    {
+        warnings.push_back("fAutoDropReach has to be within [0.5, 10], clamping");
+        config.autoDropReach = std::clamp(config.autoDropReach, 0.5f, 10.0f);
     }
 
     if (config.randomPathMaxDistance < 0.0f)
@@ -325,6 +348,7 @@ void NavServer::RegisterCallbacks()
     add(MessageType::SET_AVOID_ZONES, std::bind_front(&NavServer::HandleSetAvoidZones, this));
     add(MessageType::STEER, std::bind_front(&NavServer::HandleSteer, this));
     add(MessageType::REPORT_STUCK, std::bind_front(&NavServer::HandleReportStuck, this));
+    add(MessageType::PATH_EX, std::bind_front(&NavServer::HandlePathEx, this));
 }
 
 AnTcpError NavServer::Run() noexcept
@@ -947,4 +971,85 @@ void NavServer::HandleReportStuck(ClientHandler* handler, AnTcpMessageType type,
     }
 
     handler->SendDataVar(type, Navigation->ReportStuck(request.mapId, request.position, request.radius));
+}
+
+void NavServer::HandlePathEx(ClientHandler* handler, AnTcpMessageType type, const void* data, int size)
+{
+    PathRequestData request{};
+    const PathExResponseHeader failed{0, 0};
+
+    if (!ReadRequest(data, size, request))
+    {
+        LogTooSmall(handler, type, size, sizeof(request));
+        handler->SendDataPtr(type, &failed);
+        return;
+    }
+
+    const auto client = Navigation->GetClient(handler->GetId());
+
+    if (!client)
+    {
+        handler->SendDataPtr(type, &failed);
+        return;
+    }
+
+    PathTuningData tuning{};
+    const bool hasTuning = static_cast<size_t>(size) >= sizeof(request) + sizeof(tuning);
+
+    if (hasTuning)
+    {
+        std::memcpy(&tuning, static_cast<const char*>(data) + sizeof(request), sizeof(tuning));
+    }
+
+    const bool randomize = HasFlag(request.flags, PathRequestFlags::RANDOMIZE);
+    PathOptions options = MakePathOptions(request.flags, hasTuning ? &tuning : nullptr);
+    options.follow = options.follow && !randomize;
+
+    Path& path = client->GetPathBuffer();
+    Path& scratch = client->GetScratchPathBuffer();
+    std::vector<unsigned char> flags(static_cast<size_t>(path.maxSize), 0);
+    bool partial = false;
+
+    bool ok = randomize ? Navigation->GetRandomPath(handler->GetId(), request.mapId, request.start, request.end, path,
+                                                    Cfg.randomPathMaxDistance, &partial, &options, flags.data())
+                        : Navigation->GetPath(handler->GetId(), request.mapId, request.start, request.end, path,
+                                              &partial, &options, flags.data());
+
+    if (ok && partial && HasFlag(request.flags, PathRequestFlags::REQUIRE_COMPLETE))
+    {
+        ok = false;
+    }
+
+    if (!ok || path.pointCount <= 0)
+    {
+        handler->SendDataPtr(type, &failed);
+        return;
+    }
+
+    // Legacy smoothing moves every point: only for paths without off-mesh connections (their points must stay).
+    const Path* result = &path;
+    const bool offMesh = std::any_of(flags.begin(), flags.begin() + path.pointCount,
+                                     [](unsigned char f) { return (f & PATH_POINT_OFFMESH) != 0; });
+
+    if (!offMesh)
+    {
+        result = ApplyPathFlags(handler->GetId(), request.mapId, request.flags,
+                                randomize ? PathType::RANDOM : PathType::STRAIGHT, path, scratch);
+
+        if (result != &path)
+        {
+            std::fill(flags.begin(), flags.end(), 0);
+            flags[0] = PATH_POINT_START;
+            flags[static_cast<size_t>(result->pointCount - 1)] |= partial ? 0 : PATH_POINT_END;
+        }
+    }
+
+    const PathExResponseHeader header{result->pointCount, partial ? PATH_RESULT_PARTIAL : 0};
+    std::vector<char> buffer(sizeof(header) + static_cast<size_t>(result->pointCount) * (sizeof(Vector3) + 1));
+    std::memcpy(buffer.data(), &header, sizeof(header));
+    std::memcpy(buffer.data() + sizeof(header), result->points,
+                static_cast<size_t>(result->pointCount) * sizeof(Vector3));
+    std::memcpy(buffer.data() + sizeof(header) + static_cast<size_t>(result->pointCount) * sizeof(Vector3),
+                flags.data(), static_cast<size_t>(result->pointCount));
+    handler->SendData(type, buffer.data(), buffer.size());
 }

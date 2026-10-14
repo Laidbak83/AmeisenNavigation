@@ -1,5 +1,6 @@
 #include "TestFramework.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <chrono>
@@ -434,6 +435,68 @@ TEST_CASE(Server_AvoidZonesSteerAndStuckReports)
     CHECK(closest(AsVectors(*response)) >= 10.0f);
 }
 
+TEST_CASE(Server_PathExReportsPointFlags)
+{
+    ServerFixture server([](AmeisenNavConfig& config) { config.autoDropHeight = 8.0f; });
+    RawClient client(server.Port());
+    REQUIRE(client.Connected());
+
+    const auto parse = [](const std::vector<char>& data, PathExResponseHeader& header, std::vector<Vector3>& points,
+                          std::vector<unsigned char>& flags) {
+        REQUIRE(data.size() >= sizeof(header));
+        std::memcpy(&header, data.data(), sizeof(header));
+        REQUIRE(data.size() == sizeof(header) + static_cast<size_t>(header.pointCount) * (sizeof(Vector3) + 1));
+        points.resize(static_cast<size_t>(header.pointCount));
+        flags.resize(static_cast<size_t>(header.pointCount));
+        std::memcpy(points.data(), data.data() + sizeof(header), points.size() * sizeof(Vector3));
+        std::memcpy(flags.data(), data.data() + sizeof(header) + points.size() * sizeof(Vector3), flags.size());
+    };
+
+    PathExResponseHeader header{};
+    std::vector<Vector3> points;
+    std::vector<unsigned char> flags;
+
+    // Off the platform: one drop.
+    PathRequestData request = MakePathRequest();
+    request.start = Wow(-425.0f, TestWorld::PLATFORM_Y, -425.0f);
+    request.end = Wow(-600.0f, 0.0f, -425.0f);
+
+    for (const int extra : {0, static_cast<int>(PathRequestFlags::RANDOMIZE) | static_cast<int>(PathRequestFlags::SHORTCUT)})
+    {
+        request.flags = extra;
+        const auto response = client.Request(MessageType::PATH_EX, request);
+        REQUIRE(response.has_value());
+        parse(*response, header, points, flags);
+        CHECK(header.pointCount >= 2);
+        CHECK_EQ(header.resultFlags, 0);
+        CHECK((flags.front() & PATH_POINT_START) != 0);
+        CHECK((flags.back() & PATH_POINT_END) != 0);
+        CHECK_EQ(std::count_if(flags.begin(), flags.end(), [](unsigned char f) { return (f & PATH_POINT_DROP) != 0; }), 1);
+    }
+
+    // Way up: partial, and rejected with REQUIRE_COMPLETE.
+    std::swap(request.start, request.end);
+    request.flags = 0;
+    auto response = client.Request(MessageType::PATH_EX, request);
+    REQUIRE(response.has_value());
+    parse(*response, header, points, flags);
+    CHECK_EQ(header.resultFlags, static_cast<int>(PATH_RESULT_PARTIAL));
+
+    request.flags = static_cast<int>(PathRequestFlags::REQUIRE_COMPLETE);
+    response = client.Request(MessageType::PATH_EX, request);
+    REQUIRE(response.has_value());
+    parse(*response, header, points, flags);
+    CHECK_EQ(header.pointCount, 0);
+
+    // Smoothing on a path without off-mesh connections still works.
+    request = MakePathRequest(static_cast<int>(PathRequestFlags::SMOOTH_CATMULLROM));
+    response = client.Request(MessageType::PATH_EX, request);
+    REQUIRE(response.has_value());
+    parse(*response, header, points, flags);
+    CHECK(header.pointCount > 5);
+    CHECK((flags.front() & PATH_POINT_START) != 0);
+}
+
 TEST_CASE(Server_CastRayAndCastRayEx)
 {
     ServerFixture server;
@@ -639,7 +702,7 @@ TEST_CASE(Server_MalformedRequestsAlwaysGetAnAnswer)
                                    MessageType::CAST_RAY, MessageType::RANDOM_POINT, MessageType::RANDOM_POINT_AROUND,
                                    MessageType::GET_HEIGHT, MessageType::CONFIGURE_FILTER, MessageType::CAST_RAY_EX,
                                    MessageType::EXPLORE_POLY, MessageType::SET_AVOID_ZONES, MessageType::STEER,
-                                   MessageType::REPORT_STUCK})
+                                   MessageType::REPORT_STUCK, MessageType::PATH_EX})
     {
         REQUIRE(client.SendRequest(static_cast<unsigned char>(type), &tiny, 1));
         CHECK(client.ReadResponse(static_cast<unsigned char>(type)).has_value());

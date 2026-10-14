@@ -1,6 +1,7 @@
 #include "AmeisenNavigation.hpp"
 
 #include <cfloat>
+#include <chrono>
 #include <cmath>
 
 #include <DetourNode.h>
@@ -61,11 +62,68 @@ AmeisenNavigation::AmeisenNavigation(const AmeisenNavigationSettings& settings) 
         NavSource = std::move(mmapSource);
     }
 
+    NavSource->SetPostLoad([this](int mapId, dtNavMesh& navMesh) { AddOffMeshLinks(mapId, navMesh); });
+
     if (!Settings.avoidZonesFile.empty())
     {
         const size_t zones = GlobalZones.Open(Settings.avoidZonesFile);
         LogI("Loaded ", zones, " avoid zones from ", Settings.avoidZonesFile.string());
     }
+}
+
+void AmeisenNavigation::AddOffMeshLinks(int mapId, dtNavMesh& navMesh)
+{
+    if (Settings.offMeshFile.empty() && Settings.autoDropHeight <= 0.0f)
+    {
+        return;
+    }
+
+    // Walkable flags of the navmesh format for links without their own.
+    unsigned short groundFlags = NAV_GROUND;
+
+    if (!Settings.useAnp)
+    {
+        groundFlags = Settings.mmapFormat == MmapFormat::SF548 ? static_cast<unsigned short>(NavArea548::GROUND)
+                                                               : static_cast<unsigned short>(NavFlag335a::GROUND);
+    }
+
+    const auto start = std::chrono::steady_clock::now();
+    std::vector<OffMeshLink> links;
+    size_t fromFile = 0;
+
+    if (!Settings.offMeshFile.empty())
+    {
+        links = OffMeshLinks::ReadFile(Settings.offMeshFile, mapId, groundFlags);
+        fromFile = links.size();
+    }
+
+    OffMeshLinks::DropSettings drops;
+    drops.maxHeight = Settings.autoDropHeight;
+    drops.reach = Settings.autoDropReach;
+    const auto found = OffMeshLinks::FindDrops(navMesh, drops);
+    links.insert(links.end(), found.begin(), found.end());
+
+    if (links.empty())
+    {
+        return;
+    }
+
+    const int rebuilt = TileRebuilder::AddOffMeshLinks(navMesh, links);
+    const auto ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+    LogI("Map ", mapId, ": ", fromFile, " off-mesh connections from file, ", found.size(), " drop links, ",
+         rebuilt < 0 ? std::string("some tiles failed to rebuild") : std::format("{} tiles rebuilt", rebuilt), " in ",
+         ms, "ms");
+
+    std::lock_guard lock(OffMeshStatsMutex);
+    AddedOffMeshLinks[mapId] = static_cast<int>(links.size());
+}
+
+int AmeisenNavigation::GetAddedOffMeshLinks(int mapId) const
+{
+    std::lock_guard lock(OffMeshStatsMutex);
+    const auto it = AddedOffMeshLinks.find(mapId);
+    return it != AddedOffMeshLinks.end() ? it->second : 0;
 }
 
 MmapFormat AmeisenNavigation::GetMmapFormat() const noexcept
@@ -124,7 +182,7 @@ bool AmeisenNavigation::PreloadMap(int mapId) noexcept
 }
 
 bool AmeisenNavigation::GetPath(size_t clientId, int mapId, const Vector3& startPosition, const Vector3& endPosition,
-                                Path& path, bool* partial, const PathOptions* options)
+                                Path& path, bool* partial, const PathOptions* options, unsigned char* pointFlags)
 {
     path.Clear();
     const auto ctx = GetQueryContext(clientId, mapId);
@@ -136,34 +194,28 @@ bool AmeisenNavigation::GetPath(size_t clientId, int mapId, const Vector3& start
 
     LogD("[", clientId, "] GetPath (", mapId, ") ", startPosition, " -> ", endPosition);
 
-    const bool found = options && options->follow
-                           ? CalculateFollowPath(ctx.query, ctx.filter, *ctx.client, mapId, startPosition, endPosition,
-                                                 path, partial)
-                           : CalculateNormalPath(ctx.query, ctx.filter, *ctx.client, startPosition, endPosition, path,
-                                                 nullptr, partial);
+    dtPolyRef* refs = ctx.client->GetStraightPathRefBuffer();
+    unsigned char* flags = ctx.client->GetStraightPathFlagBuffer();
+    const bool found =
+        options && options->follow
+            ? CalculateFollowPath(ctx.query, ctx.filter, *ctx.client, mapId, startPosition, endPosition, path,
+                                  partial, refs, flags)
+            : CalculateNormalPath(ctx.query, ctx.filter, *ctx.client, startPosition, endPosition, path, refs, partial,
+                                  flags);
 
     if (!found)
     {
         return false;
     }
 
-    const bool zones = HasZones(ctx.filter);
+    ToPointFlags(ctx.query, flags, refs, path.pointCount, flags);
+    Vector3 target;
+    endPosition.CopyToRDCoords(target);
+    RefineAll(ctx.query, ctx.filter, path, flags, target, options, true);
 
-    if (options || zones)
+    if (pointFlags)
     {
-        Path scratch(path.maxSize);
-
-        if (zones)
-        {
-            LeadAroundZones(ctx.query, ctx.filter, path, scratch);
-        }
-
-        if (options)
-        {
-            Vector3 target;
-            endPosition.CopyToRDCoords(target);
-            RefinePath(ctx.query, ctx.filter, path, target, *options, true, scratch);
-        }
+        std::copy(flags, flags + path.pointCount, pointFlags);
     }
 
     path.ToWowCoords();
@@ -172,7 +224,7 @@ bool AmeisenNavigation::GetPath(size_t clientId, int mapId, const Vector3& start
 
 bool AmeisenNavigation::GetRandomPath(size_t clientId, int mapId, const Vector3& startPosition,
                                       const Vector3& endPosition, Path& path, float maxRandomDistance, bool* partial,
-                                      const PathOptions* options)
+                                      const PathOptions* options, unsigned char* pointFlags)
 {
     path.Clear();
     const auto ctx = GetQueryContext(clientId, mapId);
@@ -187,34 +239,30 @@ bool AmeisenNavigation::GetRandomPath(size_t clientId, int mapId, const Vector3&
     // The straight path corner refs need their own buffer, the poly path buffer is still being read while
     // findStraightPath writes them.
     dtPolyRef* cornerRefs = ctx.client->GetStraightPathRefBuffer();
+    unsigned char* flags = ctx.client->GetStraightPathFlagBuffer();
 
     if (!CalculateNormalPath(ctx.query, ctx.filter, *ctx.client, startPosition, endPosition, path, cornerRefs,
-                             partial))
+                             partial, flags))
     {
         return false;
     }
 
-    // Zone detours, shortcut and stop distance before the jitter (they need the plain corners and their refs), the
-    // rest after.
-    const bool zones = HasZones(ctx.filter);
-    Path scratch(options || zones ? path.maxSize : 1);
+    ToPointFlags(ctx.query, flags, cornerRefs, path.pointCount, flags);
     Vector3 target;
     endPosition.CopyToRDCoords(target);
 
-    if (zones)
+    // Zone detours, shortcut and stop distance before the jitter, wall margin and arcs after it.
+    if (HasZones(ctx.filter) || (options && (options->shortcut || options->tuning.stopDistance > 0.0f)))
     {
-        LeadAroundZones(ctx.query, ctx.filter, path, scratch);
-    }
+        PathOptions first;
 
-    if (zones || (options && (options->shortcut || options->tuning.stopDistance > 0.0f)))
-    {
         if (options)
         {
-            PathOptions first;
             first.shortcut = options->shortcut;
             first.tuning.stopDistance = options->tuning.stopDistance;
-            RefinePath(ctx.query, ctx.filter, path, target, first, true, scratch);
         }
+
+        RefineAll(ctx.query, ctx.filter, path, flags, target, &first, true);
 
         // The corner refs belong to the plain path.
         for (int i = 0; i < path.pointCount; ++i)
@@ -227,14 +275,16 @@ bool AmeisenNavigation::GetRandomPath(size_t clientId, int mapId, const Vector3&
     if (maxRandomDistance > 0.0f)
     {
         // Keep start and end, jitter every corner in between on the navmesh. An offset is only kept if the way to it
-        // and on to the next corner stays on the navmesh (no shortcut over a ledge or into a wall).
+        // and on to the next corner stays on the navmesh (no shortcut over a ledge or into a wall). Both ends of an
+        // off-mesh connection stay where they are.
         PolyPosition previous{cornerRefs[0], path[0]};
 
         for (int i = 1; i < path.pointCount - 1; ++i)
         {
             const PolyPosition original{cornerRefs[i], path[i]};
 
-            if (!original.poly || !previous.poly)
+            if (!original.poly || !previous.poly || (flags[i] & PATH_POINT_OFFMESH)
+                || (flags[i - 1] & PATH_POINT_OFFMESH))
             {
                 previous = original;
                 continue;
@@ -266,11 +316,140 @@ bool AmeisenNavigation::GetRandomPath(size_t clientId, int mapId, const Vector3&
         PathOptions second = *options;
         second.shortcut = false;
         second.tuning.stopDistance = 0.0f;
-        RefinePath(ctx.query, ctx.filter, path, target, second, false, scratch);
+        RefineAll(ctx.query, ctx.filter, path, flags, target, &second, false);
+    }
+
+    if (pointFlags)
+    {
+        std::copy(flags, flags + path.pointCount, pointFlags);
     }
 
     path.ToWowCoords();
     return true;
+}
+
+void AmeisenNavigation::ToPointFlags(const dtNavMeshQuery* query, const unsigned char* detourFlags,
+                                     const dtPolyRef* refs, int count, unsigned char* out) noexcept
+{
+    const dtNavMesh* mesh = query->getAttachedNavMesh();
+
+    for (int i = 0; i < count; ++i)
+    {
+        const unsigned char d = detourFlags[i];
+        unsigned char f = 0;
+        f |= (d & DT_STRAIGHTPATH_START) ? PATH_POINT_START : 0;
+        f |= (d & DT_STRAIGHTPATH_END) ? PATH_POINT_END : 0;
+
+        if ((d & DT_STRAIGHTPATH_OFFMESH_CONNECTION) && i + 1 < count)
+        {
+            f |= PATH_POINT_OFFMESH;
+            const dtOffMeshConnection* con = mesh ? mesh->getOffMeshConnectionByRef(refs[i]) : nullptr;
+
+            switch (con ? static_cast<OffMeshLinkKind>(con->userId) : OffMeshLinkKind::UNKNOWN)
+            {
+                case OffMeshLinkKind::JUMP: f |= PATH_POINT_JUMP; break;
+                case OffMeshLinkKind::DROP: f |= PATH_POINT_DROP; break;
+                default: f |= PATH_POINT_LINK; break;
+            }
+        }
+
+        out[i] = f;
+    }
+}
+
+void AmeisenNavigation::RefineAll(const dtNavMeshQuery* query, const dtQueryFilter* filter, Path& path,
+                                  unsigned char* flags, const Vector3& target, const PathOptions* options,
+                                  bool allowShortcut) const noexcept
+{
+    const bool zones = HasZones(filter);
+
+    if ((!options && !zones) || path.pointCount < 2)
+    {
+        return;
+    }
+
+    try
+    {
+        // Off-mesh connections can't be walked: the path is refined in pieces between them, their ends stay.
+        std::vector<Vector3> points;
+        std::vector<unsigned char> pointFlags;
+        points.reserve(static_cast<size_t>(path.pointCount));
+        pointFlags.reserve(static_cast<size_t>(path.pointCount));
+        Path piece(path.maxSize);
+        Path scratch(path.maxSize);
+
+        const auto refinePiece = [&](int from, int to, bool last) {
+            piece.Clear();
+
+            for (int i = from; i <= to; ++i)
+            {
+                piece.TryAppend(path[i]);
+            }
+
+            if (piece.pointCount >= 2)
+            {
+                if (zones)
+                {
+                    LeadAroundZones(query, filter, piece, scratch);
+                }
+
+                if (options)
+                {
+                    PathOptions o = *options;
+                    o.tuning.stopDistance = last ? o.tuning.stopDistance : 0.0f;
+                    RefinePath(const_cast<dtNavMeshQuery*>(query), filter, piece, target, o, allowShortcut, scratch);
+                }
+            }
+
+            for (int k = 0; k < piece.pointCount; ++k)
+            {
+                unsigned char f = 0;
+
+                if (k == 0)
+                {
+                    f = flags[from];
+                }
+                else if (k == piece.pointCount - 1 && piece[k] == path[to])
+                {
+                    f = flags[to];
+                }
+
+                if (k == 0 && !points.empty() && points.back() == piece[0])
+                {
+                    pointFlags.back() |= f;
+                    continue;
+                }
+
+                points.push_back(piece[k]);
+                pointFlags.push_back(f);
+            }
+        };
+
+        int from = 0;
+
+        for (int i = 0; i + 1 < path.pointCount; ++i)
+        {
+            if (flags[i] & PATH_POINT_OFFMESH)
+            {
+                refinePiece(from, i, false);
+                from = i + 1;
+            }
+        }
+
+        refinePiece(from, path.pointCount - 1, true);
+
+        if (static_cast<int>(points.size()) > path.maxSize)
+        {
+            return; // the unrefined path fits, keep it
+        }
+
+        std::copy(points.begin(), points.end(), path.points);
+        std::copy(pointFlags.begin(), pointFlags.end(), flags);
+        path.pointCount = static_cast<int>(points.size());
+    }
+    catch (...)
+    {
+    }
 }
 
 bool AmeisenNavigation::MoveAlongSurface(size_t clientId, int mapId, const Vector3& startPosition,
@@ -712,6 +891,10 @@ bool AmeisenNavigation::ExplorePolygon(size_t clientId, int mapId, const Vector3
     // Connect the waypoints in tour order with navmesh paths. Segments use their own buffer, the client's
     // path buffers may be the output.
     Path segment(Settings.maxPointPath);
+    std::vector<unsigned char> routeFlags; // PathPointFlags of the route points
+    routeFlags.reserve(static_cast<size_t>(path.maxSize));
+    dtPolyRef* segmentRefs = ctx.client->GetStraightPathRefBuffer();
+    unsigned char* segmentFlags = ctx.client->GetStraightPathFlagBuffer();
     const std::vector<int> order = Tour::Order(startPosition, waypoints, 8, spacing * 0.5f);
     std::vector<bool> unreachable(waypoints.size(), false);
 
@@ -727,7 +910,8 @@ bool AmeisenNavigation::ExplorePolygon(size_t clientId, int mapId, const Vector3
         const PolyPosition& target = waypointPolys[index];
         bool partial = false;
 
-        if (!CalculateNormalPath(ctx.query, ctx.filter, *ctx.client, current, target, segment, nullptr, &partial))
+        if (!CalculateNormalPath(ctx.query, ctx.filter, *ctx.client, current, target, segment, segmentRefs, &partial,
+                                 segmentFlags))
         {
             continue;
         }
@@ -753,15 +937,26 @@ bool AmeisenNavigation::ExplorePolygon(size_t clientId, int mapId, const Vector3
             continue; // other island, blocked by the filter, ...
         }
 
-        segment.ToWowCoords();
+        ToPointFlags(ctx.query, segmentFlags, segmentRefs, segment.pointCount, segmentFlags);
 
+        // The route stays in RD coordinates until it is complete.
         for (int i = path.Empty() ? 0 : 1; i < segment.pointCount; ++i)
         {
-            if (!path.TryAppendUnique(segment[i]))
+            const unsigned char f = segmentFlags[i] & ~(PATH_POINT_START | PATH_POINT_END);
+
+            if (path.pointCount > 0 && path[path.pointCount - 1] == segment[i])
+            {
+                routeFlags.back() |= f;
+                continue;
+            }
+
+            if (!path.TryAppend(segment[i]))
             {
                 res.truncated = true;
                 break;
             }
+
+            routeFlags.push_back(f);
         }
 
         if (res.truncated)
@@ -775,16 +970,21 @@ bool AmeisenNavigation::ExplorePolygon(size_t clientId, int mapId, const Vector3
 
     if (((options && (options->avoidWalls || options->roundCorners)) || HasZones(ctx.filter)) && path.pointCount > 1)
     {
-        path.ToRdCoords();
-        LeadAroundZones(ctx.query, ctx.filter, path, segment);
+        // Shortcut, stop distance and follow don't apply: the route has to visit its waypoints.
+        PathOptions corners;
 
         if (options)
         {
-            RefinePath(ctx.query, ctx.filter, path, Vector3{}, *options, false, segment);
+            corners.avoidWalls = options->avoidWalls;
+            corners.roundCorners = options->roundCorners;
+            corners.tuning = options->tuning;
         }
 
-        path.ToWowCoords();
+        routeFlags.resize(static_cast<size_t>(path.maxSize), 0);
+        RefineAll(ctx.query, ctx.filter, path, routeFlags.data(), Vector3{}, options ? &corners : nullptr, false);
     }
+
+    path.ToWowCoords();
 
     LogD("[", clientId, "] ExplorePolygon (", mapId, ") ", polygon.size(), " vertices, spacing ", spacing, ": ",
          res.reached, "/", res.waypoints, " waypoints, ", path.pointCount, " points",
@@ -886,7 +1086,7 @@ size_t AmeisenNavigation::GetQueryCount(int mapId) const
 bool AmeisenNavigation::CalculateNormalPath(dtNavMeshQuery* query, const dtQueryFilter* filter,
                                             AmeisenNavClient& client, const Vector3& startPosition,
                                             const Vector3& endPosition, Path& path, dtPolyRef* straightPathRefs,
-                                            bool* partial) noexcept
+                                            bool* partial, unsigned char* straightPathFlags) noexcept
 {
     path.Clear();
 
@@ -910,13 +1110,13 @@ bool AmeisenNavigation::CalculateNormalPath(dtNavMeshQuery* query, const dtQuery
         return false;
     }
 
-    return CalculateNormalPath(query, filter, client, start, end, path, straightPathRefs, partial);
+    return CalculateNormalPath(query, filter, client, start, end, path, straightPathRefs, partial, straightPathFlags);
 }
 
 bool AmeisenNavigation::CalculateNormalPath(dtNavMeshQuery* query, const dtQueryFilter* filter,
                                             AmeisenNavClient& client, const PolyPosition& start,
                                             const PolyPosition& end, Path& path, dtPolyRef* straightPathRefs,
-                                            bool* partial) noexcept
+                                            bool* partial, unsigned char* straightPathFlags) noexcept
 {
     path.Clear();
 
@@ -956,13 +1156,14 @@ bool AmeisenNavigation::CalculateNormalPath(dtNavMeshQuery* query, const dtQuery
         }
     }
 
-    // Corner refs go into the client's buffer, never write more corners than it holds.
-    const int maxCorners =
-        straightPathRefs ? std::min(path.maxSize, client.GetStraightPathRefBufferSize()) : path.maxSize;
+    // Corner refs/flags go into the client's buffers, never write more corners than they hold.
+    const int maxCorners = straightPathRefs || straightPathFlags
+                               ? std::min(path.maxSize, client.GetStraightPathRefBufferSize())
+                               : path.maxSize;
 
     const dtStatus straightPathStatus =
         SafeFindStraightPath(query, start.pos, endPos, polyPath, polyPathCount, reinterpret_cast<float*>(path.points),
-                             nullptr, straightPathRefs, &path.pointCount, maxCorners);
+                             straightPathFlags, straightPathRefs, &path.pointCount, maxCorners);
 
     if (dtStatusFailed(straightPathStatus) || path.pointCount <= 0)
     {

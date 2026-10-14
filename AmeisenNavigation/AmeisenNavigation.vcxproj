@@ -220,6 +220,7 @@
     <ClInclude Include="src\NavSources\OffMesh\TileRebuilder.hpp" />
     <ClInclude Include="src\NavSources\NavQueryFilter.hpp" />
     <ClInclude Include="src\NavSources\AvoidZoneStore.hpp" />
+    <ClInclude Include="src\NavSources\OffMesh\OffMeshLinks.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />

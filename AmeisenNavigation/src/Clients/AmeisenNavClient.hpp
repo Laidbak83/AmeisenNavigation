@@ -64,6 +64,7 @@ class AmeisenNavClient
     int StraightPathRefsSize;
     std::unique_ptr<dtPolyRef[]> PolyPathBuffer;
     std::unique_ptr<dtPolyRef[]> StraightPathRefs;
+    std::unique_ptr<unsigned char[]> StraightPathFlags;
     Path PrimaryPath;
     Path SecondaryPath;
     std::unique_ptr<FollowState> Follow;
@@ -79,6 +80,7 @@ public:
           StraightPathRefsSize(std::max(pointPathBufferSize, 1)),
           PolyPathBuffer(std::make_unique<dtPolyRef[]>(static_cast<size_t>(PolyPathBufferSize))),
           StraightPathRefs(std::make_unique<dtPolyRef[]>(static_cast<size_t>(StraightPathRefsSize))),
+          StraightPathFlags(std::make_unique<unsigned char[]>(static_cast<size_t>(StraightPathRefsSize))),
           PrimaryPath(pointPathBufferSize),
           SecondaryPath(pointPathBufferSize)
     {
@@ -168,6 +170,9 @@ public:
     /// Poly refs of the straight path corners, sized like the path buffers.
     dtPolyRef* GetStraightPathRefBuffer() noexcept { return StraightPathRefs.get(); }
     int GetStraightPathRefBufferSize() const noexcept { return StraightPathRefsSize; }
+
+    /// Flags of the straight path corners (same size as the ref buffer).
+    unsigned char* GetStraightPathFlagBuffer() noexcept { return StraightPathFlags.get(); }
 
     /// Two reusable path buffers (result + scratch for smoothing/validation).
     Path& GetPathBuffer() noexcept { return PrimaryPath; }

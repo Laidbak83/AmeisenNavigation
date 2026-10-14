@@ -4,6 +4,7 @@
 #include <cmath>
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <random>
 #include <shared_mutex>
 #include <span>
@@ -24,6 +25,7 @@
 #include "NavSources/Mmap/MmapNavSource.hpp"
 #include "NavSources/Mmap/MmapQueryFilterProvider.hpp"
 #include "NavSources/NavMeshQueryPool.hpp"
+#include "NavSources/OffMesh/OffMeshLinks.hpp"
 #include "Smoothing/BezierCurve.hpp"
 #include "Smoothing/CatmullRomSpline.hpp"
 #include "Smoothing/ChaikinCurve.hpp"
@@ -114,6 +116,9 @@ struct AmeisenNavigationSettings
     std::filesystem::path avoidZonesFile; // REPORT_STUCK zones are loaded from / appended to this file (optional)
     float stuckZoneRadius = 3.0f;        // radius of a stuck report that doesn't give one
     float stuckZoneCost = 8.0f;          // cost multiplier of a stuck zone (raised by repeated reports)
+    std::filesystem::path offMeshFile;   // off-mesh connections in TrinityCore's offmesh.txt format (optional)
+    float autoDropHeight = 0.0f;         // one way drop-down links from ledges up to this height (0 = off)
+    float autoDropReach = 2.0f;          // how far beyond a ledge the landing point may be
 };
 
 /// A unit near a steering client (WoW coordinates).
@@ -167,6 +172,17 @@ constexpr float MAX_STOP_DISTANCE = 200.0f;
 constexpr float FOLLOW_MAX_START_DEVIATION = 3.0f;
 constexpr float FOLLOW_MAX_TARGET_MOVE = 10.0f;
 
+/// What a path point is (PATH_EX reports them).
+enum PathPointFlags : unsigned char
+{
+    PATH_POINT_START = 1 << 0,
+    PATH_POINT_END = 1 << 1,
+    PATH_POINT_OFFMESH = 1 << 2, // leave this point by an off-mesh connection, the next point is where it ends
+    PATH_POINT_JUMP = 1 << 3,    // ... by jumping (over a low obstacle or a gap)
+    PATH_POINT_DROP = 1 << 4,    // ... by walking off a ledge
+    PATH_POINT_LINK = 1 << 5,    // ... by a custom connection (sOffMeshFile, connections of the navmesh file)
+};
+
 /// Details of an ExplorePolygon run.
 struct ExploreResult
 {
@@ -198,6 +214,12 @@ class AmeisenNavigation
 
     AvoidZoneStore GlobalZones;
 
+    mutable std::mutex OffMeshStatsMutex;
+    std::unordered_map<int, int> AddedOffMeshLinks;
+
+    /// Add the configured off-mesh connections to a freshly loaded navmesh (INavSource post-load hook).
+    void AddOffMeshLinks(int mapId, dtNavMesh& navMesh);
+
     // Query pools per map, created with the first request for a map and never removed (navmeshes aren't either).
     mutable std::shared_mutex QueryPoolsMutex;
     std::unordered_map<int, std::unique_ptr<NavMeshQueryPool>> QueryPools;
@@ -212,6 +234,9 @@ public:
     /// MMAP format in use (UNKNOWN for ANP navmeshes or when detection failed).
     MmapFormat GetMmapFormat() const noexcept;
 
+    /// Off-mesh connections added to a map's navmesh when it was loaded (file + automatic ones).
+    int GetAddedOffMeshLinks(int mapId) const;
+
     bool NewClient(size_t clientId);
     void FreeClient(size_t clientId);
     std::shared_ptr<AmeisenNavClient> GetClient(size_t clientId) const;
@@ -225,13 +250,14 @@ public:
 
     /// Find a path from start to end. Returns true on success, populates path (WoW coordinates).
     /// If the end isn't reachable the path leads as close as possible and *partial is set to true.
+    /// pointFlags (optional, path.maxSize entries) receives the PathPointFlags of every point.
     bool GetPath(size_t clientId, int mapId, const Vector3& startPosition, const Vector3& endPosition, Path& path,
-                 bool* partial = nullptr, const PathOptions* options = nullptr);
+                 bool* partial = nullptr, const PathOptions* options = nullptr, unsigned char* pointFlags = nullptr);
 
     /// Find a path with randomized intermediate waypoints (within maxRandomDistance).
     bool GetRandomPath(size_t clientId, int mapId, const Vector3& startPosition, const Vector3& endPosition,
                        Path& path, float maxRandomDistance, bool* partial = nullptr,
-                       const PathOptions* options = nullptr);
+                       const PathOptions* options = nullptr, unsigned char* pointFlags = nullptr);
 
     /// Route that explores an area: waypoints on a hexagonal grid (`spacing` apart) inside the polygon
     /// (WoW x/y outline, the outline's z picks the floor), snapped to the navmesh, visited in a short tour
@@ -368,21 +394,32 @@ private:
     /// the end isn't reachable (the path then leads to the closest reachable point).
     bool CalculateNormalPath(dtNavMeshQuery* query, const dtQueryFilter* filter, AmeisenNavClient& client,
                              const Vector3& startPosition, const Vector3& endPosition, Path& path,
-                             dtPolyRef* straightPathRefs = nullptr, bool* partial = nullptr) noexcept;
+                             dtPolyRef* straightPathRefs = nullptr, bool* partial = nullptr,
+                             unsigned char* straightPathFlags = nullptr) noexcept;
 
     /// Same for positions already on the navmesh.
     bool CalculateNormalPath(dtNavMeshQuery* query, const dtQueryFilter* filter, AmeisenNavClient& client,
                              const PolyPosition& start, const PolyPosition& end, Path& path,
-                             dtPolyRef* straightPathRefs = nullptr, bool* partial = nullptr) noexcept;
+                             dtPolyRef* straightPathRefs = nullptr, bool* partial = nullptr,
+                             unsigned char* straightPathFlags = nullptr) noexcept;
+
+    /// Detour straight path flags + corner refs -> PathPointFlags (in place allowed: out may be detourFlags).
+    static void ToPointFlags(const dtNavMeshQuery* query, const unsigned char* detourFlags, const dtPolyRef* refs,
+                             int count, unsigned char* out) noexcept;
+
+    /// Zone detours and options for a path (RD) with PathPointFlags, in pieces between off-mesh connections (their
+    /// ends never move). flags is updated with the path.
+    void RefineAll(const dtNavMeshQuery* query, const dtQueryFilter* filter, Path& path, unsigned char* flags,
+                   const Vector3& target, const PathOptions* options, bool allowShortcut) const noexcept;
 
     // ── Path refinement (PathRefinement.cpp), paths in RD coordinates ──
 
     /// Path along the client's follow corridor (reused if the start and target moved little, searched otherwise).
     bool CalculateFollowPath(dtNavMeshQuery* query, const dtQueryFilter* filter, AmeisenNavClient& client, int mapId,
-                             const Vector3& startPosition, const Vector3& endPosition, Path& path,
-                             bool* partial) noexcept;
+                             const Vector3& startPosition, const Vector3& endPosition, Path& path, bool* partial,
+                             dtPolyRef* straightPathRefs, unsigned char* straightPathFlags) noexcept;
 
-    /// Apply the options to a path. target (RD) is the requested end, used for the stop distance.
+    /// Apply the options to a path without off-mesh connections. target (RD) is the requested end (stop distance).
     void RefinePath(dtNavMeshQuery* query, const dtQueryFilter* filter, Path& path, const Vector3& target,
                     const PathOptions& options, bool allowShortcut, Path& scratch) const noexcept;
 

@@ -329,3 +329,173 @@ TEST_CASE(OffMesh_LinkAcrossTilesIsConnectedOnBothEnds)
     outside.start = {5000.0f, 0.0f, 5000.0f};
     CHECK_EQ(TileRebuilder::AddOffMeshLinks(*mesh, std::span(&outside, 1)), 0);
 }
+
+namespace {
+AmeisenNavigationSettings AnpWorld()
+{
+    AmeisenNavigationSettings settings;
+    settings.meshFolder = TestWorld::Get().meshDir;
+    settings.useAnp = true;
+    settings.maxPointPath = 256;
+    return settings;
+}
+
+int CountFlag(const unsigned char* flags, int count, unsigned char flag)
+{
+    int n = 0;
+
+    for (int i = 0; i < count; ++i)
+    {
+        n += (flags[i] & flag) ? 1 : 0;
+    }
+
+    return n;
+}
+} // namespace
+
+TEST_CASE(OffMesh_AutoDropLinksLeadOffThePlatform)
+{
+    // The platform deck (y = 5) can't be reached or left on foot.
+    const Vector3 deck = Wow(-425.0f, TestWorld::PLATFORM_Y, -425.0f);
+    const Vector3 ground = Wow(-600.0f, 0.0f, -425.0f);
+
+    {
+        AmeisenNavigation nav(AnpWorld());
+        REQUIRE(nav.NewClient(1));
+        Path path(256);
+        bool partial = false;
+        REQUIRE(nav.GetPath(1, TestWorld::MAP_ID, deck, ground, path, &partial));
+        CHECK(partial);
+    }
+
+    AmeisenNavigationSettings settings = AnpWorld();
+    settings.autoDropHeight = 8.0f;
+    AmeisenNavigation nav(settings);
+    REQUIRE(nav.NewClient(1));
+    Path path(256);
+    std::vector<unsigned char> flags(256);
+    bool partial = true;
+    REQUIRE(nav.GetPath(1, TestWorld::MAP_ID, deck, ground, path, &partial, nullptr, flags.data()));
+    CHECK(!partial);
+    CHECK(nav.GetAddedOffMeshLinks(TestWorld::MAP_ID) > 0);
+    CHECK_EQ(CountFlag(flags.data(), path.pointCount, PATH_POINT_DROP), 1);
+    CHECK((flags[0] & PATH_POINT_START) != 0);
+    CHECK((flags[static_cast<size_t>(path.pointCount - 1)] & PATH_POINT_END) != 0);
+
+    // The drop starts on the deck and lands on the ground next to it.
+    for (int i = 0; i + 1 < path.pointCount; ++i)
+    {
+        if (flags[static_cast<size_t>(i)] & PATH_POINT_DROP)
+        {
+            CHECK_NEAR(path[i].z, TestWorld::PLATFORM_Y, 1.0);
+            CHECK_NEAR(path[i + 1].z, 0.0f, 1.0);
+            CHECK(path[i].DistanceTo(path[i + 1]) < 8.0f);
+        }
+    }
+
+    // One way: still no way up.
+    REQUIRE(nav.GetPath(1, TestWorld::MAP_ID, ground, deck, path, &partial));
+    CHECK(partial);
+
+    // No drops along the open ground (no ledges there): the ground doesn't drop anywhere else.
+    CHECK(nav.GetAddedOffMeshLinks(TestWorld::MAP_ID) < 64);
+}
+
+TEST_CASE(OffMesh_FileLinksAndJumpsAreReported)
+{
+    const auto file = std::filesystem::temp_directory_path() / "anav_tests" / "offmesh.txt";
+    std::filesystem::create_directories(file.parent_path());
+
+    // Across the wall (WoW: x = RD z, y = RD x).
+    {
+        std::ofstream out(file);
+        out << "// comment line\n";
+        out << std::format("{} 32,32 (-300 {} 0) (-300 {} 0) 1.5  // over the wall\n", TestWorld::MAP_ID,
+                           TestWorld::WALL_X - 3.0f, TestWorld::WALL_X + 4.0f);
+        out << "999 1,1 (0 0 0) (1 1 1) 1.0\n";          // other map
+        out << "1 1,1 (nan 0 0) (1 1 1) 1.0\n";          // invalid
+    }
+
+    AmeisenNavigationSettings settings = AnpWorld();
+    settings.offMeshFile = file;
+    AmeisenNavigation nav(settings);
+    REQUIRE(nav.NewClient(1));
+
+    const Vector3 start = Wow(-700.0f, 0.0f, -300.0f);
+    const Vector3 end = Wow(-200.0f, 0.0f, -300.0f);
+    Path path(256);
+    std::vector<unsigned char> flags(256);
+    REQUIRE(nav.GetPath(1, TestWorld::MAP_ID, start, end, path, nullptr, nullptr, flags.data()));
+    CHECK_EQ(nav.GetAddedOffMeshLinks(TestWorld::MAP_ID), 1);
+    CHECK_EQ(CountFlag(flags.data(), path.pointCount, PATH_POINT_LINK), 1);
+
+    // Refinement keeps both ends of the link.
+    PathOptions all;
+    all.shortcut = all.avoidWalls = all.roundCorners = true;
+    REQUIRE(nav.GetPath(1, TestWorld::MAP_ID, start, end, path, nullptr, &all, flags.data()));
+    bool kept = false;
+
+    for (int i = 0; i + 1 < path.pointCount; ++i)
+    {
+        if (flags[static_cast<size_t>(i)] & PATH_POINT_LINK)
+        {
+            kept = std::fabs(path[i].y - (TestWorld::WALL_X - 3.0f)) < 1.6f
+                   && std::fabs(path[i + 1].y - (TestWorld::WALL_X + 4.0f)) < 1.6f;
+        }
+    }
+
+    CHECK(kept);
+
+    // Jump links are excluded by default and enabled with a cost.
+    NavMeshPtr mesh = LoadWorld();
+    OffMeshLink jump;
+    jump.start = {TestWorld::WALL_X - 3.0f, 0.0f, -250.0f};
+    jump.end = {TestWorld::WALL_X + 4.0f, 0.0f, -250.0f};
+    jump.radius = 1.5f;
+    jump.bidirectional = true;
+    jump.area = AREA_OFFMESH_JUMP;
+    jump.flags = NAV_JUMP;
+    jump.userId = static_cast<unsigned int>(OffMeshLinkKind::JUMP);
+    REQUIRE(TileRebuilder::AddOffMeshLinks(*mesh, std::span(&jump, 1)) == 1);
+
+    AnpQueryFilterProvider provider;
+    NavMeshQueryPtr query(dtAllocNavMeshQuery());
+    REQUIRE(dtStatusSucceed(query->init(mesh.get(), 4096)));
+    AmeisenNavClient client(1, &provider, 2048, 256);
+    const auto jumpCorners = [&]() {
+        const float extents[3]{2.0f, 4.0f, 2.0f};
+        const Vector3 s{-700.0f, 0.0f, -250.0f};
+        const Vector3 e{-200.0f, 0.0f, -250.0f};
+        dtPolyRef sRef = 0, eRef = 0;
+        Vector3 sp, ep;
+        query->findNearestPoly(s, extents, client.QueryFilter(), &sRef, sp);
+        query->findNearestPoly(e, extents, client.QueryFilter(), &eRef, ep);
+        dtPolyRef polys[2048];
+        int count = 0;
+        query->findPath(sRef, eRef, sp, ep, client.QueryFilter(), polys, &count, 2048);
+        float points[256 * 3];
+        unsigned char straightFlags[256];
+        dtPolyRef refs[256];
+        int n = 0;
+        query->findStraightPath(sp, ep, polys, count, points, straightFlags, refs, &n, 256);
+        unsigned char pointFlags[256];
+        // Same conversion as the server.
+        int jumps = 0;
+
+        for (int i = 0; i < n; ++i)
+        {
+            const dtOffMeshConnection* con = (straightFlags[i] & DT_STRAIGHTPATH_OFFMESH_CONNECTION)
+                                                 ? mesh->getOffMeshConnectionByRef(refs[i])
+                                                 : nullptr;
+            pointFlags[i] = con && con->userId == static_cast<unsigned int>(OffMeshLinkKind::JUMP) ? 1 : 0;
+            jumps += pointFlags[i];
+        }
+
+        return jumps;
+    };
+
+    CHECK_EQ(jumpCorners(), 0);
+    const AreaCost enableJumps[]{{AREA_OFFMESH_JUMP, 2.0f}};
+    REQUIRE(client.ConfigureQueryFilter(ClientState::NORMAL, enableJumps));
+    CHECK_EQ(jumpCorners(), 1);
+}
