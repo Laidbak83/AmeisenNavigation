@@ -9,6 +9,7 @@
 #include <mutex>
 
 #include "AmeisenNavigation.hpp"
+#include "Dbc/Db2Header.hpp"
 #include "Exporter.hpp"
 #include "TestWorld.hpp"
 #include "Wow/TcData.hpp"
@@ -55,7 +56,7 @@ constexpr uint32_t OBJECT_DISPLAY_ID = 900;
 constexpr uint32_t POOL_LIQUID_TYPE = 77; // slime in the LiquidType CSV
 
 template <typename T>
-void Put(Bytes& out, const T& value)
+void PutRaw(Bytes& out, const T& value)
 {
     const auto* p = reinterpret_cast<const unsigned char*>(&value);
     out.insert(out.end(), p, p + sizeof(T));
@@ -66,7 +67,7 @@ void PutVector(Bytes& out, const std::vector<T>& values)
 {
     for (const T& v : values)
     {
-        Put(out, v);
+        PutRaw(out, v);
     }
 }
 
@@ -88,13 +89,13 @@ Bytes MakeMapFile(int adtX, int adtY, bool packed, const std::vector<std::pair<i
 
     Bytes areaData;
     MapAreaHeader areaHeader{MAP_AREA_MAGIC, 0, 0};
-    Put(areaData, areaHeader);
+    PutRaw(areaData, areaHeader);
     uint16_t areaIds[16][16]{};
 
     for (const auto& [r, c, id] : areas)
         areaIds[r][c] = id;
 
-    Put(areaData, areaIds);
+    PutRaw(areaData, areaIds);
 
     Bytes heightData;
     const float minH = *std::min_element(v9.begin(), v9.end());
@@ -102,16 +103,16 @@ Bytes MakeMapFile(int adtX, int adtY, bool packed, const std::vector<std::pair<i
     const float lo = std::min(minH, *std::min_element(v8.begin(), v8.end()));
     const float hi = std::max(maxH, *std::max_element(v8.begin(), v8.end()));
     MapHeightHeader heightHeader{MAP_HEIGHT_MAGIC, packed ? HEIGHT_AS_INT8 : 0u, lo, hi};
-    Put(heightData, heightHeader);
+    PutRaw(heightData, heightHeader);
 
     if (packed)
     {
         const float step = 255.0f / (hi - lo);
 
         for (const float h : v9)
-            Put(heightData, static_cast<uint8_t>((h - lo) * step + 0.5f));
+            PutRaw(heightData, static_cast<uint8_t>((h - lo) * step + 0.5f));
         for (const float h : v8)
-            Put(heightData, static_cast<uint8_t>((h - lo) * step + 0.5f));
+            PutRaw(heightData, static_cast<uint8_t>((h - lo) * step + 0.5f));
     }
     else
     {
@@ -166,14 +167,14 @@ Bytes MakeMapFile(int adtX, int adtY, bool packed, const std::vector<std::pair<i
                                      static_cast<uint8_t>(maxColumn - minColumn + 2),
                                      static_cast<uint8_t>(maxRow - minRow + 2),
                                      INVALID_LIQUID_HEIGHT};
-        Put(liquidData, liquidHeader);
+        PutRaw(liquidData, liquidHeader);
         uint16_t entries[16][16]{};
-        Put(liquidData, entries);
-        Put(liquidData, flags);
+        PutRaw(liquidData, entries);
+        PutRaw(liquidData, flags);
 
         for (int r = minRow; r < minRow + liquidHeader.height; ++r)
             for (int c = minColumn; c < minColumn + liquidHeader.width; ++c)
-                Put(liquidData, heights[r][c]);
+                PutRaw(liquidData, heights[r][c]);
     }
 
     uint8_t holes[16][16][8]{};
@@ -192,20 +193,20 @@ Bytes MakeMapFile(int adtX, int adtY, bool packed, const std::vector<std::pair<i
     header.holesSize = sizeof(holes);
 
     Bytes out;
-    Put(out, header);
+    PutRaw(out, header);
     PutBytes(out, areaData);
     PutBytes(out, heightData);
     PutBytes(out, liquidData);
-    Put(out, holes);
+    PutRaw(out, holes);
     return out;
 }
 
 void PutBih(Bytes& out)
 {
     const float bounds[6]{};
-    Put(out, bounds);
-    Put(out, uint32_t{0}); // tree nodes
-    Put(out, uint32_t{0}); // objects
+    PutRaw(out, bounds);
+    PutRaw(out, uint32_t{0}); // tree nodes
+    PutRaw(out, uint32_t{0}); // objects
 }
 
 struct VmoGroup
@@ -220,21 +221,21 @@ Bytes MakeVmo(bool isM2, const std::vector<VmoGroup>& groups)
 {
     Bytes out(VMAP_MAGIC, VMAP_MAGIC + 8);
     PutBytes(out, Bytes{'W', 'M', 'O', 'D'});
-    Put(out, uint32_t{8});
-    Put(out, uint32_t{isM2 ? MODEL_IS_M2 : 0u});
-    Put(out, uint32_t{0}); // root WMO id
+    PutRaw(out, uint32_t{8});
+    PutRaw(out, uint32_t{isM2 ? MODEL_IS_M2 : 0u});
+    PutRaw(out, uint32_t{0}); // root WMO id
     PutBytes(out, Bytes{'G', 'M', 'O', 'D'});
-    Put(out, static_cast<uint32_t>(groups.size()));
+    PutRaw(out, static_cast<uint32_t>(groups.size()));
 
     for (const VmoGroup& group : groups)
     {
         const float bounds[6]{};
-        Put(out, bounds);
-        Put(out, uint32_t{0}); // MOGP flags
-        Put(out, uint32_t{0}); // group WMO id
+        PutRaw(out, bounds);
+        PutRaw(out, uint32_t{0}); // MOGP flags
+        PutRaw(out, uint32_t{0}); // group WMO id
         PutBytes(out, Bytes{'V', 'E', 'R', 'T'});
-        Put(out, static_cast<uint32_t>(4 + 12 * group.verts.size()));
-        Put(out, static_cast<uint32_t>(group.verts.size()));
+        PutRaw(out, static_cast<uint32_t>(4 + 12 * group.verts.size()));
+        PutRaw(out, static_cast<uint32_t>(group.verts.size()));
 
         if (group.verts.empty())
         {
@@ -243,8 +244,8 @@ Bytes MakeVmo(bool isM2, const std::vector<VmoGroup>& groups)
 
         PutVector(out, group.verts);
         PutBytes(out, Bytes{'T', 'R', 'I', 'M'});
-        Put(out, static_cast<uint32_t>(4 + 4 * group.indices.size()));
-        Put(out, static_cast<uint32_t>(group.indices.size() / 3));
+        PutRaw(out, static_cast<uint32_t>(4 + 4 * group.indices.size()));
+        PutRaw(out, static_cast<uint32_t>(group.indices.size() / 3));
         PutVector(out, group.indices);
         PutBytes(out, Bytes{'M', 'B', 'I', 'H'});
         PutBih(out);
@@ -252,16 +253,16 @@ Bytes MakeVmo(bool isM2, const std::vector<VmoGroup>& groups)
 
         if (!group.liquid)
         {
-            Put(out, uint32_t{0});
+            PutRaw(out, uint32_t{0});
             continue;
         }
 
         const auto& liquid = *group.liquid;
-        Put(out, static_cast<uint32_t>(24 + 4 * liquid.heights.size() + liquid.flags.size()));
-        Put(out, liquid.tilesX);
-        Put(out, liquid.tilesY);
-        Put(out, liquid.corner);
-        Put(out, liquid.type);
+        PutRaw(out, static_cast<uint32_t>(24 + 4 * liquid.heights.size() + liquid.flags.size()));
+        PutRaw(out, liquid.tilesX);
+        PutRaw(out, liquid.tilesY);
+        PutRaw(out, liquid.corner);
+        PutRaw(out, liquid.type);
         PutVector(out, liquid.heights);
         PutVector(out, liquid.flags);
     }
@@ -294,14 +295,14 @@ VmoGroup Box(Vector3 min, Vector3 max, bool tcM2Order)
 Bytes MakeSpawn(uint32_t id, const Vector3& wow, const Vector3& rot, const std::string& name)
 {
     Bytes out;
-    Put(out, uint8_t{0}); // flags (no bounds)
-    Put(out, uint8_t{0}); // adt id
-    Put(out, id);
+    PutRaw(out, uint8_t{0}); // flags (no bounds)
+    PutRaw(out, uint8_t{0}); // adt id
+    PutRaw(out, id);
     const float pos[3]{32.0f * T - wow.x, 32.0f * T - wow.y, wow.z};
-    Put(out, pos);
-    Put(out, rot);
-    Put(out, 1.0f);
-    Put(out, static_cast<uint32_t>(name.size()));
+    PutRaw(out, pos);
+    PutRaw(out, rot);
+    PutRaw(out, 1.0f);
+    PutRaw(out, static_cast<uint32_t>(name.size()));
     PutBytes(out, Bytes(name.begin(), name.end()));
     return out;
 }
@@ -309,7 +310,7 @@ Bytes MakeSpawn(uint32_t id, const Vector3& wow, const Vector3& rot, const std::
 Bytes MakeVmtile(const std::vector<Bytes>& spawns)
 {
     Bytes out(VMAP_MAGIC, VMAP_MAGIC + 8);
-    Put(out, static_cast<uint32_t>(spawns.size()));
+    PutRaw(out, static_cast<uint32_t>(spawns.size()));
 
     for (const Bytes& spawn : spawns)
     {
@@ -389,11 +390,11 @@ const Fixture& Get()
         // GameObjectModels.dtree: display id, name, bounds.
         Bytes dtree(VMAP_MAGIC, VMAP_MAGIC + 8);
         const std::string model = "fence.vmo";
-        Put(dtree, OBJECT_DISPLAY_ID);
-        Put(dtree, static_cast<uint32_t>(model.size()));
+        PutRaw(dtree, OBJECT_DISPLAY_ID);
+        PutRaw(dtree, static_cast<uint32_t>(model.size()));
         PutBytes(dtree, Bytes(model.begin(), model.end()));
         const float bounds[6]{};
-        Put(dtree, bounds);
+        PutRaw(dtree, bounds);
         REQUIRE(WriteBytes(f.dataDir / "vmaps" / "GameObjectModels.dtree", dtree));
 
         {
@@ -651,4 +652,67 @@ TEST_CASE(TcData_LiquidTypeIds)
     const std::unordered_map<unsigned int, LiquidType> table{{500, LiquidType::MAGMA}, {1, LiquidType::OCEAN}};
     CHECK_EQ(LiquidTypeIdToArea(500, table), LIQUID_LAVA);
     CHECK_EQ(LiquidTypeIdToArea(1, table), LIQUID_OCEAN);
+}
+
+TEST_CASE(Db2_HeaderAndExtractorLayouts)
+{
+    // WDC5: magic, version, schema string, then the WDC4 fields.
+    Bytes wdc5{'W', 'D', 'C', '5'};
+    PutRaw(wdc5, uint32_t{5});
+    wdc5.resize(wdc5.size() + 128, 0);
+    const uint32_t fields[9]{1013, 26, 120, 5000, 0xE0A6E2B1, 0xD43AFAC3, 0, 2900, 0};
+    PutRaw(wdc5, fields);
+    PutRaw(wdc5, uint16_t{4});
+    PutRaw(wdc5, uint16_t{0});
+    const uint32_t rest[7]{28, 0, 0, 0, 0, 0, 1};
+    PutRaw(wdc5, rest);
+
+    const auto header = Db2::ParseHeader(wdc5.data(), wdc5.size());
+    REQUIRE(header.has_value());
+    CHECK(header->format == "WDC5");
+    CHECK_EQ(header->recordCount, 1013u);
+    CHECK_EQ(header->fieldCount, 26u);
+    CHECK_EQ(header->layoutHash, 0xD43AFAC3u);
+    CHECK_EQ(header->totalFieldCount, 28u);
+    CHECK_EQ(header->sectionCount, 1u);
+    CHECK(!Db2::ParseHeader(wdc5.data(), wdc5.size() - 1).has_value());
+
+    // WDC3: no version or schema.
+    Bytes wdc3{'W', 'D', 'C', '3'};
+    PutBytes(wdc3, Bytes(wdc5.begin() + 4 + 4 + 128, wdc5.end()));
+    const auto old = Db2::ParseHeader(wdc3.data(), wdc3.size());
+    REQUIRE(old.has_value());
+    CHECK_EQ(old->layoutHash, 0xD43AFAC3u);
+    const Bytes wdbc{'W', 'D', 'B', 'C', 0, 0, 0, 0};
+    CHECK(!Db2::ParseHeader(wdbc.data(), wdbc.size()).has_value());
+
+    // TrinityCore master's designated initializers, an older positional one.
+    const std::string loadInfo = R"(
+struct MapLoadInfo
+{
+    static constexpr DB2MetaField MetaFields[25] = { { .Type = FT_STRING, .ArraySize = 1, .IsSigned = true } };
+    static constexpr DB2Meta MetaInstance =
+    {
+        .FileDataId         = 1349477,
+        .IndexField         = -1,
+        .ParentIndexField   = -1,
+        .FieldCount         = 25,
+        .FileFieldCount     = 25,
+        .LayoutHash         = 0x75863E23,
+        .Fields             = MetaFields
+    };
+};
+
+struct LiquidTypeLoadInfo
+{
+    static DB2Meta const* Instance() { static DB2Meta instance(1371380, -1, 18, 18, 0xCD5D7F2B, fields, -1); }
+};
+)";
+    const auto layouts = Db2::ParseLoadInfo(loadInfo);
+    REQUIRE(layouts.size() == 2);
+    const auto& map = layouts.at(Db2::TableKey("Map.db2"));
+    CHECK_EQ(map.layoutHash, 0x75863E23u);
+    CHECK_EQ(map.fileFieldCount, 25);
+    CHECK_EQ(layouts.at(Db2::TableKey("DBFilesClient/LiquidType.db2")).layoutHash, 0xCD5D7F2Bu);
+    CHECK(Db2::TableKey("GameobjectDisplayInfoLoadInfo") == Db2::TableKey("GameObjectDisplayInfo.db2"));
 }

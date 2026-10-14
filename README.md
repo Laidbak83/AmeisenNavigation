@@ -89,14 +89,18 @@ runs without a config file. `CTRL+C` (or `SIGTERM`) shuts the server down gracef
 ## Exporter
 
 ```
-AmeisenNavigation.Exporter --wow <WoW folder> --output <mesh folder> [options]
+AmeisenNavigation.Exporter --wow <WoW folder> --output <mesh folder> [options]       # MPQ clients (up to WotLK)
+AmeisenNavigation.Exporter --tc-data <folder> --output <mesh folder> [options]       # recent clients, see below
 
   -m, --map <ids>      Only export these map ids (comma separated, e.g. 0,1,530,571)
   -t, --tile <x,y>     Only export a single ADT (debugging)
   -j, --threads <n>    Worker threads (default: all cores)
   -s, --skip-existing  Don't rebuild maps whose .anp file already exists (resume an interrupted export)
   -d, --debug          Debug logging + area debug images (<output>/debug/area_<map>_<x>_<y>.bmp)
-  -l, --list-maps      List the maps in Map.dbc
+  -l, --list-maps      List the maps in Map.dbc (or the maps with files in --tc-data)
+  -g, --gameobjects <file> Add the collision of game object spawns (see Game objects)
+      --area-table <csv>   With --tc-data: AreaTable as CSV, for faction and city areas
+      --liquid-types <csv> With --tc-data: LiquidType as CSV, for the kind of WMO liquids
       --climb <h>      Highest step walked up without jumping (default 1.0 yards), obstacles above it block
       --radius <r>     Agent radius, distance kept from walls (default 0.6)
       --height <h>     Agent height, lower ceilings block (default 2.0)
@@ -160,25 +164,69 @@ in game after an export (`anav_navmesh2ply`, below, shows the navmesh around the
 ## Recent clients (CASC)
 
 Clients since Legion (7.0, retail and the classic flavours) store their data in CASC instead of MPQ archives. The
-exporter reads MPQs only; for CASC clients the extraction is left to TrinityCore's tools, which follow every client
-build:
+exporter doesn't read CASC itself: TrinityCore's extractors do, and they follow every client build. Two ways from
+there, both start with TrinityCore master's tools:
 
 1. Build TrinityCore master's tools only (`cmake -DTOOLS=1 -DSERVERS=0`, see TrinityCore's install guide):
    `mapextractor`, `vmap4extractor`, `vmap4assembler`, `mmaps_generator`.
-2. In the client folder: `mapextractor`, `vmap4extractor`, `vmap4assembler Buildings vmaps`, then `mmaps_generator`.
-   If the extractors fail to read the map list, the client build changed a DB2 layout: see
-   [DB2 layouts](#db2-layouts) below.
-3. Point the server at the `mmaps` folder (`sMmapsPath`), `iMmapFormat=0` detects TrinityCore master (MMAP v16) from
-   the magic in front of the `.mmap` files (or set `3`). Child maps (phases) without their own files can use their
-   parent's with `sParentMaps`.
+2. In the client folder: `mapextractor` (writes `maps/`), `vmap4extractor` then `vmap4assembler Buildings vmaps`
+   (writes `vmaps/`). If an extractor fails on a DB2 file, the client build changed its layout: see
+   [DB2 layouts](#db2-layouts).
+3. Either:
+   - **Our exporter on TrinityCore's extracted data** (recommended for bots): `AmeisenNavigation.Exporter --tc-data
+     <folder with maps/ and vmaps/> --output <meshes>` builds `.anp` navmeshes with everything the MPQ export has:
+     fences from 1.05 yards on block (climb 1.0, fine height cells), jump and drop links, WMO collision faces like
+     the client, game objects (`--gameobjects`, display ids resolved through `vmaps/GameObjectModels.dtree`), water,
+     ocean, lava and slime areas. Faction and city areas need AreaTable as CSV (`--area-table`, e.g. the CSV export
+     of wago.tools or any DB2 tool for the client build: columns `ID`, `ParentAreaID`, `Flags[0]`,
+     `FactionGroupMask`; `Flags` 0x08 marks the capitals). WMO liquid kinds come from `--liquid-types` (`ID`,
+     `SoundBank`), without it the classic ids are used (most WMO liquids) and other ids are water. Roads aren't in
+     TrinityCore's files: no road areas. Then `bUseAnpFiles=1` on the server.
+   - **TrinityCore's own navmeshes**: run `mmaps_generator` too and point the server at the `mmaps` folder
+     (`sMmapsPath`); `iMmapFormat=0` detects TrinityCore master (MMAP v16) from the magic in front of the `.mmap`
+     files (or set `3`). Child maps (phases) without their own files can use their parent's with `sParentMaps`.
+     These navmeshes are coarser for bots: TrinityCore's generator climbs 6 cells (~1.6 yards, it walks over most
+     fences) and has no jump links.
+
+`--tc-data` reads the files of TrinityCore master as of October 2026 (`.map` version 10, vmaps `VMAP_4.E`); older
+extractor output is refused with a message. Tested on synthetic files written like the extractors do
+(`tests/E2ETcDataTests.cpp`), not on a real client yet: see [Checking a real client](#checking-a-real-client).
 
 ### DB2 layouts
 
-The extractors read `Map.db2` (and a few others) with layouts compiled into
-`src/tools/extractor_common/ExtractorDB2LoadInfo.h`. A client build that adds a field changes the layout hash and
-the field count, the extractor then refuses the file. Example from build 70245 (classic): `Map.db2` got
-`OceanLiquidTypeID` before `NavigationMaxDistance`, 25 -> 26 fields, layout hash `0x75863E23` -> `0xD43AFAC3`.
-The new field list comes from the WoWDBDefs definitions (`Map.dbd`, github.com/wowdev/WoWDBDefs) for the build.
+The extractors read `Map.db2`, `LiquidType.db2`, `LiquidMaterial.db2`, `LiquidObject.db2`, `CinematicCamera.db2` and
+`GameObjectDisplayInfo.db2` with layouts compiled into `src/tools/extractor_common/ExtractorDB2LoadInfo.h`. A client
+build that adds a field changes the layout hash and the field count, the extractor then refuses the file. Example from
+build 70245 (classic): `Map.db2` got `OceanLiquidTypeID` before `NavigationMaxDistance`, 25 -> 26 fields, layout hash
+`0x75863E23` -> `0xD43AFAC3`.
+
+`anav_db2info` tells which tables changed: export the DB2 files from the client with a CASC tool (CASCExplorer,
+wow.tools.local) and run
+
+```
+anav_db2info Map.db2 LiquidType.db2 ... --loadinfo TrinityCore/src/tools/extractor_common/ExtractorDB2LoadInfo.h
+```
+
+It prints the layout hash and field count of each file and `MISMATCH` with the values to put in the LoadInfo when the
+extractors expect another layout (exit code 2). The new field list (names, types, array sizes, order) comes from the
+WoWDBDefs definition of the table for the build (`Map.dbd`, github.com/wowdev/WoWDBDefs); rebuild the tools after
+the change.
+
+### Checking a real client
+
+What to look at after the first export of a recent client (none was available while writing this):
+
+1. `--list-maps --tc-data <folder>` lists the maps with files. Export one small map first (`-m 1` Kalimdor or a
+   starting zone with `-t x,y`), with `--debug` for the area images.
+2. The log: no "Invalid or old .map file", few "model spawns without a readable .vmo file", game objects added.
+3. `anav_navmesh2ply <meshes> <mapId> out.ply --anp --box ...` around a town: walls and fences cut the navmesh,
+   buildings are hollow where doors are, water (`--area`) where the lakes are, jump links (yellow) over low fences.
+   If buildings or trees are mirrored or turned, the vmap transform is wrong (`TcData::SpawnToWow`); if game objects
+   are, it's `GameObjects::SpawnTransform`.
+4. In game: paths from the server around a few fences, through a city gate, along a pier, and a fence spawned
+   by the server (game object) - the bot shouldn't run into anything it can't step over.
+5. Compare with TrinityCore's own navmeshes of the same data (server with `iMmapFormat=3`): ours should have the same
+   walkable areas, minus fences and plus jump links.
 
 ## Protocol
 

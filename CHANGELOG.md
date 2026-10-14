@@ -26,10 +26,24 @@
   collision fields, they were read with the WotLK layout (collision missing or garbage). Chunked MD21 models
   (Legion+) are read too.
 
-### Tools
+### Exporter: recent clients
+
+- **`--tc-data`**: navmeshes from TrinityCore master's extracted data (`maps/*.map` from `mapextractor`, `vmaps/` from
+  `vmap4extractor` + `vmap4assembler`), the way to export CASC clients (Legion and later, the classic flavours) with
+  our pipeline instead of TrinityCore's `mmaps_generator`: fences, climb, jump and drop links, game objects (display
+  ids from `GameObjectModels.dtree`). Terrain with holes (float, uint16 and uint8 heights, flat tiles), liquids per
+  square with deep ocean left out like TrinityCore does, WMO and M2 models with TrinityCore's transforms, WMO liquids.
+  Faction and city areas from an AreaTable CSV export (`--area-table`), WMO liquid kinds from a LiquidType CSV
+  (`--liquid-types`, else the classic ids). No road areas (not in TrinityCore's files).
+- Exporter refactored: extraction (MPQ or TrinityCore files) and the navmesh build/save step are separate.
+
 
 - **`anav_navmesh2ply`**: a navmesh (ANP or any MMAP format) as a binary PLY file colored by slope or area, with
   off-mesh connections as ribbons, optionally cut to a box around a spot.
+- **`anav_db2info`**: header of DB2 files (WDC3-5) checked against TrinityCore's `ExtractorDB2LoadInfo.h`: which
+  tables a client build changed (layout hash, field count) when the extractors refuse it.
+- README: step by step guide for recent clients (extraction, DB2 layouts, export, server settings, checks on a real
+  client).
 
 ## 1.10.0.0 (protocol 3)
 

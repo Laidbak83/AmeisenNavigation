@@ -204,6 +204,11 @@ if(ANAV_BUILD_SERVER)
     install(TARGETS anav_navmesh2ply RUNTIME DESTINATION bin)
 endif()
 
+# DB2 headers checked against TrinityCore's ExtractorDB2LoadInfo.h (why the extractors refuse a client build).
+add_executable(anav_db2info ${CMAKE_CURRENT_SOURCE_DIR}/tools/Db2Info.cpp)
+target_link_libraries(anav_db2info PRIVATE anav_options)
+install(TARGETS anav_db2info RUNTIME DESTINATION bin)
+
 # ── AmeisenNavigation.Exporter ──
 
 # Header-only exporter pipeline (tile processor, area marking, WoW formats).

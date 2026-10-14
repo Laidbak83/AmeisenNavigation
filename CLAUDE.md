@@ -34,6 +34,7 @@ tests/run_client_integration.sh build/bin/AmeisenNavigation.Server   # needs the
 
 anav_benchmark [adtsPerAxis] [queries]             # manual build/query throughput benchmark
 anav_navmesh2ply <meshes> <mapId> <out.ply> [--anp] [--box x0,y0,x1,y1] [--area]   # navmesh as colored PLY
+anav_db2info <file.db2>... [--loadinfo ExtractorDB2LoadInfo.h]   # why TrinityCore's extractors refuse a client build
 ```
 
 Formatting: `.clang-format` (4 spaces, 120 columns, braces on their own line). CI: `.github/workflows/ci.yml`.
@@ -83,7 +84,9 @@ Default filters per `ClientState` come from `IQueryFilterProvider`; `CONFIGURE_F
 placements deduplicated by uniqueId, never clipped) → `Structure::Clean` (drops garbage geometry) →
 `AdtTileProcessor` (one Detour tile per ADT, triangles bucketed per tile and sub-tile, Recast per sub-tile, merged,
 rebuilt coarser when Detour's 65535 vertex limit is hit) → `AnpWriter`. The Detour tile grid is aligned to the ADT
-grid (tile x = maxAdtX - adtX). WMO-only maps (dungeons) come from the WDT's global WMO.
+grid (tile x = maxAdtX - adtX). WMO-only maps (dungeons) come from the WDT's global WMO. Recent (CASC) clients go
+through TrinityCore's extractors: `--tc-data` (`Wow/TcData.hpp`) reads their `.map` files and vmaps into the same
+`MapData` and `BuildMap` (vmap spawn space: WoW x = 32 * TILESIZE - pos.x, M2 `.vmo` triangles are stored flipped).
 
 **Vendored code.** `recastnavigation/` and `AmeisenNavigation.Pack/src/miniz` carry local fixes marked with
 `AmeisenNavigation:` comments (null deref in `closestPointOnDetailEdges`, raycast iteration cap, miniz UB,
