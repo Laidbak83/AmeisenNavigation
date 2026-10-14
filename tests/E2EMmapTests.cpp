@@ -1,11 +1,13 @@
 #include "TestFramework.hpp"
 
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <format>
 #include <fstream>
 
 #include "AmeisenNavigation.hpp"
+#include "NavMeshPly.hpp"
 #include "NavSources/OffMesh/TileRebuilder.hpp"
 #include "TestWorld.hpp"
 
@@ -498,4 +500,48 @@ TEST_CASE(OffMesh_FileLinksAndJumpsAreReported)
     const AreaCost enableJumps[]{{AREA_OFFMESH_JUMP, 2.0f}};
     REQUIRE(client.ConfigureQueryFilter(ClientState::NORMAL, enableJumps));
     CHECK_EQ(jumpCorners(), 1);
+}
+
+TEST_CASE(NavMeshPly_WritesEveryTriangleAndLink)
+{
+    NavMeshPtr mesh = LoadWorld();
+    OffMeshLink link;
+    link.start = {TestWorld::WALL_X - 3.0f, 0.0f, -300.0f};
+    link.end = {TestWorld::WALL_X + 4.0f, 0.0f, -300.0f};
+    link.radius = 1.5f;
+    link.area = AREA_OFFMESH_JUMP;
+    link.flags = NAV_JUMP;
+    REQUIRE(TileRebuilder::AddOffMeshLinks(*mesh, std::span(&link, 1)) == 1);
+
+    const auto path = std::filesystem::temp_directory_path() / "anav_tests" / "navmesh.ply";
+    NavMeshPly::Stats stats;
+    REQUIRE(NavMeshPly::Write(*mesh, path.string(), {}, &stats));
+    CHECK(stats.triangles > 100);
+    CHECK_EQ(stats.offMeshConnections, size_t{1});
+
+    // Header counts match the content: 3 vertices (15 bytes) and one face (13 bytes) per triangle.
+    std::ifstream in(path, std::ios::binary);
+    std::string line;
+    size_t vertices = 0;
+    size_t faces = 0;
+
+    while (std::getline(in, line) && line != "end_header")
+    {
+        std::sscanf(line.c_str(), "element vertex %zu", &vertices);
+        std::sscanf(line.c_str(), "element face %zu", &faces);
+    }
+
+    const size_t triangles = stats.triangles + 4 * stats.offMeshConnections;
+    CHECK_EQ(faces, triangles);
+    CHECK_EQ(vertices, triangles * 3);
+    const auto headerEnd = static_cast<size_t>(in.tellg());
+    CHECK_EQ(std::filesystem::file_size(path) - headerEnd, triangles * (3 * 15 + 13));
+
+    // A box around nothing writes an empty but valid file.
+    NavMeshPly::Options empty;
+    empty.box = true;
+    empty.boxMin[0] = empty.boxMin[1] = 15000.0f;
+    empty.boxMax[0] = empty.boxMax[1] = 15001.0f;
+    REQUIRE(NavMeshPly::Write(*mesh, path.string(), empty, &stats));
+    CHECK_EQ(stats.triangles, size_t{0});
 }

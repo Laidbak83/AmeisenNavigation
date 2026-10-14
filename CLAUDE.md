@@ -33,6 +33,7 @@ dotnet build AmeisenNavigation.Client/AmeisenNavigation.Client.csproj -c Release
 tests/run_client_integration.sh build/bin/AmeisenNavigation.Server   # needs the e2e test world (run ctest first)
 
 anav_benchmark [adtsPerAxis] [queries]             # manual build/query throughput benchmark
+anav_navmesh2ply <meshes> <mapId> <out.ply> [--anp] [--box x0,y0,x1,y1] [--area]   # navmesh as colored PLY
 ```
 
 Formatting: `.clang-format` (4 spaces, 120 columns, braces on their own line). CI: `.github/workflows/ci.yml`.

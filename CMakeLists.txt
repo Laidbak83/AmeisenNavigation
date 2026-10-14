@@ -195,6 +195,15 @@ if(ANAV_BUILD_SERVER)
     install(TARGETS AmeisenNavigation.Server RUNTIME DESTINATION bin)
 endif()
 
+# ── Tools ──
+
+if(ANAV_BUILD_SERVER)
+    # Navmesh (ANP or MMAP) -> colored PLY mesh for MeshLab/Blender/CloudCompare.
+    add_executable(anav_navmesh2ply ${CMAKE_CURRENT_SOURCE_DIR}/tools/Navmesh2Ply.cpp)
+    target_link_libraries(anav_navmesh2ply PRIVATE anav_core anav_options)
+    install(TARGETS anav_navmesh2ply RUNTIME DESTINATION bin)
+endif()
+
 # ── AmeisenNavigation.Exporter ──
 
 # Header-only exporter pipeline (tile processor, area marking, WoW formats).

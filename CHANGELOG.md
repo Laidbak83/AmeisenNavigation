@@ -26,6 +26,11 @@
   collision fields, they were read with the WotLK layout (collision missing or garbage). Chunked MD21 models
   (Legion+) are read too.
 
+### Tools
+
+- **`anav_navmesh2ply`**: a navmesh (ANP or any MMAP format) as a binary PLY file colored by slope or area, with
+  off-mesh connections as ribbons, optionally cut to a box around a spot.
+
 ## 1.10.0.0 (protocol 3)
 
 Older clients keep working: every addition is a new message type, a new flag or an optional trailer.

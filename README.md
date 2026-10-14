@@ -377,6 +377,15 @@ from `dep/` with MSVC and fetches StormLib from GitHub everywhere else (`-DANAV_
 `anav_benchmark [adtsPerAxis] [queries]` builds a synthetic map at production resolution and measures build and
 query throughput.
 
+### Looking at a navmesh
+
+`anav_navmesh2ply <meshes> <mapId> <out.ply> [--anp] [--format n] [--box x0,y0,x1,y1] [--area]` writes a map's
+navmesh (ANP with `--anp`, else MMAPs, `--format` like `iMmapFormat`) as a binary PLY file in WoW coordinates for
+MeshLab, Blender or CloudCompare. Triangles are colored by slope (blue flat to red at 60 degrees) or by area with
+`--area` (ground, road, city, structures, liquids; Alliance areas bluer, Horde areas redder). Off-mesh connections are
+narrow arched ribbons: jumps yellow, drops magenta, other links white. `--box` keeps the triangles around a spot (WoW
+x/y): holes where a fence stands, a link over it, a gap the navmesh shouldn't cross.
+
 ## Project layout
 
 | Folder | |
