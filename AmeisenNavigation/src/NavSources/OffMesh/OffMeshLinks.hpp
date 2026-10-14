@@ -103,9 +103,9 @@ inline std::vector<OffMeshLink> FindDrops(const dtNavMesh& mesh, const DropSetti
 
     dtQueryFilter filter; // every polygon (flags 0xffff)
     constexpr int MAX_COLUMN = 32;
-    constexpr int MAX_PATH = 256;
+    constexpr int MAX_WALK_POLYS = 256;
     dtPolyRef column[MAX_COLUMN];
-    dtPolyRef path[MAX_PATH];
+    dtPolyRef path[MAX_WALK_POLYS];
 
     for (int t = 0; t < mesh.getMaxTiles(); ++t)
     {
@@ -228,17 +228,17 @@ inline std::vector<OffMeshLink> FindDrops(const dtNavMesh& mesh, const DropSetti
                         // Skip it if walking there is about as short.
                         int pathCount = 0;
                         const dtStatus status =
-                            query->findPath(ref, landingRef, edge, landing, &filter, path, &pathCount, MAX_PATH);
+                            query->findPath(ref, landingRef, edge, landing, &filter, path, &pathCount, MAX_WALK_POLYS);
 
                         if (dtStatusSucceed(status) && pathCount > 0 && path[pathCount - 1] == landingRef
                             && !dtStatusDetail(status, DT_OUT_OF_NODES))
                         {
-                            float straight[MAX_PATH * 3];
+                            float straight[MAX_WALK_POLYS * 3];
                             int corners = 0;
                             float walk = 0.0f;
 
                             if (dtStatusSucceed(query->findStraightPath(edge, landing, path, pathCount, straight,
-                                                                        nullptr, nullptr, &corners, MAX_PATH)))
+                                                                        nullptr, nullptr, &corners, MAX_WALK_POLYS)))
                             {
                                 for (int i = 1; i < corners; ++i)
                                 {

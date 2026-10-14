@@ -4,6 +4,11 @@
 //   2 M2   collision mesh
 //   3 WDT  (incl. the global WMO of WMO-only maps)
 //   4 DBC  records and strings
+//   5 TrinityCore .map (terrain, liquids, holes, areas)
+//   6 TrinityCore .vmo collision model (added with a rotated spawn transform)
+//   7 TrinityCore .vmtile spawns
+//   8 TrinityCore GameObjectModels.dtree
+//   9 DB2 header (WDC3-5)
 // Every extracted structure is cleaned afterwards (Clean() guards the tile builder against garbage).
 
 #include <cstdint>
@@ -13,6 +18,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "Dbc/Db2Header.hpp"
 #include "Dbc/Dbc.hpp"
 #include "Mpq/CachedFileReader.hpp"
 #include "Utils/CityMap.hpp"
@@ -23,6 +29,7 @@
 #include "Wow/Adt.hpp"
 #include "Wow/AdtChunkExtractor.hpp"
 #include "Wow/RoadDetector.hpp"
+#include "Wow/TcData.hpp"
 #include "Wow/Wdt.hpp"
 
 namespace {
@@ -30,8 +37,8 @@ struct Environment
 {
     std::unique_ptr<MpqManager> mpq;
     std::unique_ptr<CachedFileReader> reader;
-    std::unordered_map<unsigned int, LiquidType> liquidTypes{{1, LiquidType::WATER}, {2, LiquidType::OCEAN},
-                                                             {3, LiquidType::MAGMA}, {4, LiquidType::SLIME}};
+    std::unordered_map<unsigned int, LiquidType> liquidTypes{
+        {1, LiquidType::WATER}, {2, LiquidType::OCEAN}, {3, LiquidType::MAGMA}, {4, LiquidType::SLIME}};
     std::unordered_set<unsigned int> cities{1, 2};
     std::unordered_map<unsigned int, unsigned char> factions{{1, 1}, {3, 2}};
 };
@@ -56,7 +63,8 @@ struct View
     CachedFileEntry entry;
 
     View(const uint8_t* data, size_t size)
-        : entry{const_cast<unsigned char*>(reinterpret_cast<const unsigned char*>(data)), static_cast<unsigned int>(size)}
+        : entry{const_cast<unsigned char*>(reinterpret_cast<const unsigned char*>(data)),
+                static_cast<unsigned int>(size)}
     {
     }
 
@@ -219,6 +227,50 @@ extern "C" int LLVMFuzzerInitialize(int*, char***)
     return 0;
 }
 
+void FuzzTcData(int format, const uint8_t* data, size_t size)
+{
+    const std::vector<unsigned char> bytes(data, data + size);
+    Structure structure;
+
+    switch (format)
+    {
+        case 5:
+            if (const auto tile = TcData::ParseMapTile(bytes, 32, 32))
+            {
+                WaterMap water;
+                CityMap cities;
+                FactionMap factions;
+                TcData::AddMapTile(*tile, &structure, &water, &cities, &factions, Env().cities, Env().factions);
+            }
+            break;
+        case 6:
+            if (const auto model = TcData::ParseWorldModel(bytes))
+            {
+                TcData::ModelSpawn spawn;
+                spawn.rot[0] = 10.0f;
+                spawn.rot[1] = 100.0f;
+                spawn.rot[2] = -5.0f;
+                spawn.scale = 1.5f;
+                const auto rotation = TcData::SpawnRotation(spawn.rot);
+                TcData::AddWorldModel(
+                    *model, [&](const Vector3& v) { return TcData::SpawnToWow(spawn, rotation, v); }, &structure,
+                    DOODAD, Env().liquidTypes);
+            }
+            break;
+        case 7:
+            (void)TcData::ParseTileSpawns(bytes);
+            break;
+        case 8:
+            (void)TcData::ParseGameObjectModels(bytes);
+            break;
+        default:
+            (void)Db2::ParseHeader(data, size);
+            break;
+    }
+
+    structure.Clean();
+}
+
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 {
     if (size < 1)
@@ -226,13 +278,26 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
         return 0;
     }
 
-    switch (data[0] % 5)
+    switch (data[0] % 10)
     {
-        case 0: FuzzAdt(data + 1, size - 1); break;
-        case 1: FuzzWmo(data + 1, size - 1); break;
-        case 2: FuzzM2(data + 1, size - 1); break;
-        case 3: FuzzWdt(data + 1, size - 1); break;
-        default: FuzzDbc(data + 1, size - 1); break;
+        case 0:
+            FuzzAdt(data + 1, size - 1);
+            break;
+        case 1:
+            FuzzWmo(data + 1, size - 1);
+            break;
+        case 2:
+            FuzzM2(data + 1, size - 1);
+            break;
+        case 3:
+            FuzzWdt(data + 1, size - 1);
+            break;
+        case 4:
+            FuzzDbc(data + 1, size - 1);
+            break;
+        default:
+            FuzzTcData(data[0] % 10, data + 1, size - 1);
+            break;
     }
 
     return 0;

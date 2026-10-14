@@ -1,4 +1,4 @@
 #pragma once
 
 /// Single source of the version for the server, the exporter and CMake (project() parses this line).
-constexpr auto AMEISENNAV_VERSION = "1.10.0.0";
+constexpr auto AMEISENNAV_VERSION = "1.11.0.0";

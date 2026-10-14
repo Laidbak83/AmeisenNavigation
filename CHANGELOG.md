@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 1.11.0.0
+
+Navmeshes for recent clients and obstacles that block. The ANP format, area ids and the protocol (3) are unchanged:
+navmeshes of 1.10 load as before, re-export to get the obstacle changes.
 
 ### Exporter: obstacles
 
@@ -44,6 +47,35 @@
   tables a client build changed (layout hash, field count) when the extractors refuse it.
 - README: step by step guide for recent clients (extraction, DB2 layouts, export, server settings, checks on a real
   client).
+
+### Fixed
+
+- A constant named `MAX_PATH` in the jump/drop link code collided with the `MAX_PATH` macro of `windows.h` and
+  StormLib (compile error depending on the include order, e.g. MSVC builds of the server).
+
+### Tested
+
+Unit, end-to-end and exporter suites (Release, ASan+UBSan), the C# client against the real server, the fuzzers (2
+minutes each, the exporter's new TrinityCore formats 5 more minutes; `FuzzExporter` has 5 new formats: `.map`, `.vmo`,
+`.vmtile`, `GameObjectModels.dtree`, DB2 headers). `anav_db2info` was run against TrinityCore master's real
+`ExtractorDB2LoadInfo.h` (it reports the `Map.db2` change of build 70245).
+
+### Limits and leads
+
+- **No real client data was available** while writing this (cloud container, no WoW client; the CDN hosts
+  `us.patch.battle.net`, `*.version.battle.net` and `wago.tools` were blocked by the network policy). Everything is
+  tested on synthetic data written like the client or TrinityCore's tools do. Not verified on real files: the
+  `--tc-data` reader (`.map` v10, vmaps `VMAP_4.E`, TrinityCore master of October 2026), the MMAP v16 reader, the
+  model axes of game objects (x forward, z up, turned around z), the modern AreaTable flag used for capitals (0x08).
+  README "Checking a real client" lists what to look at first.
+- Jump and drop links are only built inside a tile: none across ADT borders (the landing must be in the same tile).
+- The server's automatic drops (`fAutoDropHeight`) only see the navmesh, not the geometry: they can't tell a ledge
+  from a wall top and are off by default; the exporter's links are checked against the geometry.
+- `--tc-data` has no road areas (TrinityCore's files keep no textures) and needs CSV exports for faction and city
+  areas. A CASC reader in the exporter (CascLib) would remove the TrinityCore extraction step and give roads back.
+- Game objects need a spawn file (server world database or what a bot logs); doors are assumed open.
+- Leads: links across tile borders (build them per pair of neighbouring tiles), per map agent settings (e.g. a
+  higher climb for maps without fences), swimming links between water and shore, a CASC reader.
 
 ## 1.10.0.0 (protocol 3)
 

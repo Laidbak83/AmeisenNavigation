@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "../TcDataBuilder.hpp"
 #include "../TestWorld.hpp"
 #include "../WowDataBuilder.hpp"
 #include "Anp.hpp"
@@ -147,6 +148,25 @@ void ExporterSeeds(const fs::path& dir)
     Write(dir / "exporter" / "wdt", Prefixed(3, MakeWdt({{32, 32}, {33, 32}})));
     MODF::Entry global{};
     Write(dir / "exporter" / "wdt_global", Prefixed(3, MakeWdt({}, "f.wmo", &global)));
+
+    // TrinityCore extractor output.
+    {
+        using namespace TcDataBuilder;
+        const auto height = [](float x, float y) { return 0.01f * x + 0.02f * y; };
+        Write(dir / "exporter" / "tc_map",
+              Prefixed(5, MakeMapFile(32, 32, height, false, {{1, 1}}, {2, 2}, {{0, 0, 1}}, {3, 3})));
+        Write(dir / "exporter" / "tc_map_packed",
+              Prefixed(5, MakeMapFile(32, 32, height, true, {}, {0, 0}, {}, {3, 3})));
+        WorldModel::Liquid liquid;
+        liquid.tilesX = 2;
+        liquid.tilesY = 2;
+        liquid.heights.assign(9, 1.0f);
+        liquid.flags.assign(4, 0);
+        Write(dir / "exporter" / "tc_vmo",
+              Prefixed(6, MakeVmo(true, {Box({0, 0, 0}, {1, 1, 1}, true), VmoGroup{{{0, 0, 0}}, {0, 0, 0}, liquid}})));
+        Write(dir / "exporter" / "tc_vmtile", Prefixed(7, MakeVmtile({MakeSpawn(1, {1, 2, 3}, {0, 90, 0}, "a.vmo")})));
+        Write(dir / "exporter" / "tc_dtree", Prefixed(8, MakeGameObjectModels(5, "b.vmo")));
+    }
 
     StringTable strings;
     Write(dir / "exporter" / "dbc",
