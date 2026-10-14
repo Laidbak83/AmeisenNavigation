@@ -67,6 +67,7 @@ docker run -d -p 47110:47110 -v /srv/meshes:/meshes:ro ameisennav
 | `iMmapFormat` | `0` | `0` auto detect, `1` TrinityCore 3.3.5a, `2` SkyFire 5.4.8, `3` TrinityCore master (MMAP v16), `-1` custom patterns |
 | `sWorldPath` | empty | Folder of the static worlds (`.anw`), empty = `sMmapsPath` |
 | `iWorldCacheTiles` | `48` | Static world tiles kept in memory per map |
+| `fWaypointSpacing`, `fWaypointHeightError` | `4`, `0.3` | DETAIL: longest distance between waypoints, height deviation that adds a waypoint |
 | `fBodyRadius`, `fBodyHeight`, `fBodyStepHeight` | `0.4`, `2`, `0.75` | Body swept by the clear body path flag; obstacles up to the step height are walked over |
 | `sParentMaps` | empty | MMAPs: `child:parent` map pairs (Map.db2 ParentMapID), a child map without its own files uses the parent's, e.g. `2552:0` |
 | `sCustomMmapPattern` / `sCustomMmtilePattern` | TC 3.3.5a names | `std::format` patterns for `iMmapFormat=-1` (args: mapId, x, y) |
@@ -271,7 +272,7 @@ Path flags: `1` Chaikin, `2` Catmull-Rom, `4` Bezier (one smoothing), `8` valida
 `16` validate with move along surface, `32` require a complete path (fail if the end is unreachable instead of
 returning a path to the closest reachable point), `64` wall margin, `128` shortcut, `256` round corners, `512` follow
 (PATH and PATH_EX), `1024` random offsets (PATH_EX), `2048` clear body (static world: sweep a body along the path, go
-around what it runs into). Client states: `0` normal, `1` Alliance, `2` Horde, `3` dead.
+around what it runs into), `4096` detail (dense waypoints, see below). Client states: `0` normal, `1` Alliance, `2` Horde, `3` dead.
 Unknown message types get an empty response. The protocol version (GET_CONFIG) tells clients what is available:
 `2` (1.9) EXPLORE_POLY and flag `32`, `3` (1.10) everything else. Older clients simply ignore the GET_CONFIG trailer,
 older servers ignore the new flags and the tuning trailer.
@@ -294,6 +295,14 @@ same between requests and a request is cheap. Anything else searches again.
 then how to take it: `8` jump, `16` drop (walk off the ledge), `32` custom link. With `2048` clear body: `64` a point
 added to go around an obstacle the navmesh doesn't know, `128` the body runs into something on the way to the next
 point and there is no way around it nearby (jump, open the door).
+
+**DETAIL** (`4096`, PATH, RANDOM_PATH, PATH_EX): as many useful waypoints as a bot can use, all on the navmesh
+surface (the right floor on stacked geometry): a point on each side of every change of ground (water, road, building
+floor, faction border), points where the height profile bends (crests, dips, stairs, bridge humps: the surface never
+leaves the straight line between two waypoints by more than `fWaypointHeightError`, 0.3 yards) and never more than
+`fWaypointSpacing` (4 yards) apart. Corners, start, end and off-mesh connections stay with their flags, new points have
+none. A path that wouldn't fit `iMaxPointPath` gets a larger spacing (the bends and ground changes stay). Optional
+trailer after the tuning trailer: `float spacing, float heightError` (`<= 0` = defaults).
 
 **Static world** (protocol 4): `{mapId:03}.anw` files written by the exporter next to the `.anp` (`sWorldPath`
 to keep them elsewhere, `--no-world` to skip them). Tiles are read when a query needs them and kept per map
@@ -357,6 +366,8 @@ Vector3[]? path = nav.GetPath(0, start, end, PathFlags.SmoothCatmullRom | PathFl
 Vector3[]? complete = nav.GetPath(0, start, end, PathFlags.RequireComplete); // null if unreachable
 Vector3[]? fluid = nav.GetPath(0, start, end, PathFlags.Fluid, new PathTuning(StopDistance: 5f));
 Vector3[]? chase = nav.GetPath(0, position, target, PathFlags.Follow);     // stable corners while walking
+Vector3[]? dense = nav.GetPath(0, start, end, PathFlags.Fluid | PathFlags.Detail,
+                               new PathTuning(WaypointSpacing: 3f));      // waypoints every <= 3 yards, on the ground
 
 PathResult? detailed = nav.GetPathEx(0, start, end);
 // detailed.Flags[i].HasFlag(PathPointFlags.Jump): jump from Points[i] to Points[i + 1]

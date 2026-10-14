@@ -54,6 +54,14 @@ namespace AmeisenNavigation.Client
         /// </summary>
         ClearBody = 1 << 11,
 
+        /// <summary>
+        /// Dense waypoints, all on the navmesh surface: where the ground changes (water, road, building floor,
+        /// faction border), where the height profile bends (crests, dips, stairs, bridge humps) and at most
+        /// <see cref="PathTuning.WaypointSpacing"/> apart (server default fWaypointSpacing, 4 yards). Corners and
+        /// off-mesh connections stay as they are. Protocol 4.
+        /// </summary>
+        Detail = 1 << 12,
+
         /// <summary>Smooth natural movement: shortcuts, distance to walls and round corners.</summary>
         Fluid = AvoidWalls | Shortcut | RoundCorners,
     }
@@ -95,8 +103,13 @@ namespace AmeisenNavigation.Client
     /// <param name="CornerPoints">Points per arc.</param>
     /// <param name="StopDistance">End the path this far before the target, at a point that sees it (melee or casting
     /// range). 0 = at the target.</param>
+    /// <param name="WaypointSpacing"><see cref="PathFlags.Detail"/>: longest distance between two waypoints, 0 =
+    /// server default (protocol 4).</param>
+    /// <param name="WaypointHeightError"><see cref="PathFlags.Detail"/>: how far the surface may leave the line
+    /// between two waypoints, 0 = server default (protocol 4).</param>
     public readonly record struct PathTuning(float WallMargin = -1f, float CornerRadius = -1f, int CornerPoints = -1,
-                                             float StopDistance = 0f);
+                                             float StopDistance = 0f, float WaypointSpacing = 0f,
+                                             float WaypointHeightError = 0f);
 
     /// <summary>Result of <see cref="AmeisenNavClient.GetPathEx"/>.</summary>
     /// <param name="Points">Path points (WoW coordinates).</param>

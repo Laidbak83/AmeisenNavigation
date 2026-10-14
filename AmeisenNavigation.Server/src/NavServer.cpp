@@ -155,6 +155,12 @@ void NavServer::ValidateConfig(AmeisenNavConfig& config, std::vector<std::string
         errors.push_back("fBodyRadius has to be 0-5, fBodyHeight 0.5-10, fBodyStepHeight below fBodyHeight");
     }
 
+    if (!(config.waypointSpacing >= MIN_WAYPOINT_SPACING && config.waypointSpacing <= MAX_WAYPOINT_SPACING)
+        || !(config.waypointHeightError >= MIN_WAYPOINT_HEIGHT_ERROR && config.waypointHeightError <= 10.0f))
+    {
+        errors.push_back("fWaypointSpacing has to be 1-100, fWaypointHeightError 0.05-10");
+    }
+
     if (config.worldCacheTiles < 1 || config.worldCacheTiles > 4096)
     {
         errors.push_back("iWorldCacheTiles has to be between 1 and 4096");
@@ -491,7 +497,8 @@ void NavServer::OnClientDisconnect(ClientHandler* handler)
     LogI("Client disconnected: ", handler->GetIpAddress(), ":", handler->GetPort(), " (id ", handler->GetId(), ")");
 }
 
-PathOptions NavServer::MakePathOptions(int flags, const PathTuningData* tuning) const noexcept
+PathOptions NavServer::MakePathOptions(int flags, const PathTuningData* tuning,
+                                       const PathDetailData* detail) const noexcept
 {
     PathOptions options;
     options.avoidWalls = HasFlag(flags, PathRequestFlags::AVOID_WALLS);
@@ -499,6 +506,22 @@ PathOptions NavServer::MakePathOptions(int flags, const PathTuningData* tuning) 
     options.roundCorners = HasFlag(flags, PathRequestFlags::ROUND_CORNERS);
     options.follow = HasFlag(flags, PathRequestFlags::FOLLOW);
     options.clearBody = HasFlag(flags, PathRequestFlags::CLEAR_BODY);
+    options.detail = HasFlag(flags, PathRequestFlags::DETAIL);
+    options.waypointSpacing = Cfg.waypointSpacing;
+    options.waypointHeightError = Cfg.waypointHeightError;
+
+    if (detail)
+    {
+        if (std::isfinite(detail->spacing) && detail->spacing > 0.0f)
+        {
+            options.waypointSpacing = std::clamp(detail->spacing, MIN_WAYPOINT_SPACING, MAX_WAYPOINT_SPACING);
+        }
+
+        if (std::isfinite(detail->heightError) && detail->heightError > 0.0f)
+        {
+            options.waypointHeightError = std::clamp(detail->heightError, MIN_WAYPOINT_HEIGHT_ERROR, 10.0f);
+        }
+    }
     options.bodyRadius = Cfg.bodyRadius;
     options.bodyHeight = Cfg.bodyHeight;
     options.bodyStepHeight = Cfg.bodyStepHeight;
@@ -609,7 +632,16 @@ void NavServer::HandlePath(ClientHandler* handler, AnTcpMessageType type, const 
         std::memcpy(&tuning, static_cast<const char*>(data) + sizeof(request), sizeof(tuning));
     }
 
-    PathOptions options = MakePathOptions(request.flags, hasTuning ? &tuning : nullptr);
+    PathDetailData detail{};
+    const bool hasDetail = static_cast<size_t>(size) >= sizeof(request) + sizeof(tuning) + sizeof(detail);
+
+    if (hasDetail)
+    {
+        std::memcpy(&detail, static_cast<const char*>(data) + sizeof(request) + sizeof(tuning), sizeof(detail));
+    }
+
+    PathOptions options =
+        MakePathOptions(request.flags, hasTuning ? &tuning : nullptr, hasDetail ? &detail : nullptr);
     options.follow = options.follow && pathType == PathType::STRAIGHT;
 
     bool partial = false;
@@ -1028,8 +1060,17 @@ void NavServer::HandlePathEx(ClientHandler* handler, AnTcpMessageType type, cons
         std::memcpy(&tuning, static_cast<const char*>(data) + sizeof(request), sizeof(tuning));
     }
 
+    PathDetailData detail{};
+    const bool hasDetail = static_cast<size_t>(size) >= sizeof(request) + sizeof(tuning) + sizeof(detail);
+
+    if (hasDetail)
+    {
+        std::memcpy(&detail, static_cast<const char*>(data) + sizeof(request) + sizeof(tuning), sizeof(detail));
+    }
+
     const bool randomize = HasFlag(request.flags, PathRequestFlags::RANDOMIZE);
-    PathOptions options = MakePathOptions(request.flags, hasTuning ? &tuning : nullptr);
+    PathOptions options =
+        MakePathOptions(request.flags, hasTuning ? &tuning : nullptr, hasDetail ? &detail : nullptr);
     options.follow = options.follow && !randomize;
 
     Path& path = client->GetPathBuffer();

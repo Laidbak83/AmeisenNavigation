@@ -99,7 +99,8 @@ private:
     void HandleSetObjects(ClientHandler* handler, AnTcpMessageType type, const void* data, int size);
 
     /// Path refinement options from request flags and an optional tuning trailer (nullptr = defaults).
-    PathOptions MakePathOptions(int flags, const PathTuningData* tuning) const noexcept;
+    PathOptions MakePathOptions(int flags, const PathTuningData* tuning,
+                                const PathDetailData* detail = nullptr) const noexcept;
 
     /// Apply smoothing/validation flags to a raw path. Returns the buffer holding the final result.
     Path* ApplyPathFlags(size_t clientId, int mapId, int flags, PathType pathType, Path& path, Path& scratch);

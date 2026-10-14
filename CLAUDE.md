@@ -63,7 +63,8 @@ follow corridor, path buffers) and is used by one thread at a time. `Protocol.hp
 
 **Engine files.** `AmeisenNavigation.cpp` (queries, `CalculateNormalPath`, `Raycast` which casts from every polygon
 touching the start), `PathRefinement.cpp` (shortcut, wall margin, arcs, stop distance, follow corridor; every changed
-segment goes through `SegmentClear`, a step that fails is skipped), `Avoidance.cpp` (avoid zones, stuck reports,
+segment goes through `SegmentClear`, a step that fails is skipped; `ClearBody` and `DetailPath` run last),
+`Avoidance.cpp` (avoid zones, stuck reports,
 steering). Paths with off-mesh connections are refined in pieces between them (`RefineAll`, PathPointFlags): their
 ends never move. Client filters are `NavQueryFilter` (vendored Detour has `DT_VIRTUAL_QUERYFILTER` enabled): area
 exclusion (cost 0), allowed areas (cost > 0 bypasses the flag exclusion), avoid zone costs (grid when many).

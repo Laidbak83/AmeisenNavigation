@@ -607,3 +607,285 @@ void AmeisenNavigation::ClearBody(const dtNavMeshQuery* query, const dtQueryFilt
     {
     }
 }
+
+namespace {
+/// One sample of a segment's surface profile.
+struct ProfileSample
+{
+    float t;      // along the segment, 0..1
+    Vector3 pos;  // RD, on the navmesh
+    unsigned char area;
+    bool onMesh;
+};
+
+/// Surface under a point of the segment from the polygons the raycast visited (in order, so the right floor is
+/// used on stacked geometry). hint: where to start looking.
+bool SurfaceAt(const dtNavMeshQuery* query, const dtPolyRef* visited, int count, int& hint, Vector3& pos,
+               unsigned char& area)
+{
+    const auto test = [&](int i) {
+        float height = 0.0f;
+
+        if (dtStatusFailed(query->getPolyHeight(visited[i], pos, &height)))
+        {
+            return false;
+        }
+
+        pos.y = height;
+        query->getAttachedNavMesh()->getPolyArea(visited[i], &area);
+        hint = i;
+        return true;
+    };
+
+    for (int i = std::max(hint, 0); i < count; ++i)
+    {
+        if (test(i))
+        {
+            return true;
+        }
+    }
+
+    for (int i = 0; i < std::min(hint, count); ++i)
+    {
+        if (test(i))
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/// Douglas-Peucker on the height profile: keep the samples where the surface leaves the line by more than the error.
+void KeepBends(const std::vector<ProfileSample>& samples, size_t from, size_t to, float error, std::vector<bool>& keep)
+{
+    if (to <= from + 1)
+    {
+        return;
+    }
+
+    float worst = 0.0f;
+    size_t index = from;
+
+    for (size_t i = from + 1; i < to; ++i)
+    {
+        const float f = (samples[i].t - samples[from].t) / std::max(samples[to].t - samples[from].t, 1e-6f);
+        const float line = samples[from].pos.y + (samples[to].pos.y - samples[from].pos.y) * f;
+        const float deviation = std::fabs(samples[i].pos.y - line);
+
+        if (deviation > worst)
+        {
+            worst = deviation;
+            index = i;
+        }
+    }
+
+    if (worst > error)
+    {
+        keep[index] = true;
+        KeepBends(samples, from, index, error, keep);
+        KeepBends(samples, index, to, error, keep);
+    }
+}
+} // namespace
+
+void AmeisenNavigation::DetailPath(const dtNavMeshQuery* query, const dtQueryFilter* filter, Path& path,
+                                   unsigned char* flags, const PathOptions& options) noexcept
+{
+    if (path.pointCount < 2)
+    {
+        return;
+    }
+
+    try
+    {
+        const float error = std::max(options.waypointHeightError, MIN_WAYPOINT_HEIGHT_ERROR);
+        float spacing = std::clamp(options.waypointSpacing, MIN_WAYPOINT_SPACING, MAX_WAYPOINT_SPACING);
+        constexpr float SAMPLE_STEP = 0.5f; // profile resolution (about two navmesh cells)
+        constexpr int MAX_VISITED = 512;
+        dtPolyRef visited[MAX_VISITED];
+
+        // Each segment's kept samples (without its start), computed once; the uniform fill depends on the spacing.
+        struct Segment
+        {
+            std::vector<ProfileSample> samples; // empty: not detailed (off-mesh connection, raycast failed)
+            std::vector<bool> keep;
+        };
+
+        std::vector<Segment> segments(static_cast<size_t>(path.pointCount - 1));
+
+        for (int i = 0; i + 1 < path.pointCount; ++i)
+        {
+            const Vector3 a = path[i];
+            const Vector3 b = path[i + 1];
+            const float length = std::sqrt((b.x - a.x) * (b.x - a.x) + (b.z - a.z) * (b.z - a.z));
+
+            if ((flags[i] & PATH_POINT_OFFMESH) || length < 0.5f)
+            {
+                continue;
+            }
+
+            PolyPosition start;
+            dtRaycastHit hit{};
+
+            if (dtStatusFailed(query->findNearestPoly(a, RAYCAST_POLY_EXTENTS, filter, &start.poly, start.pos))
+                || !start.poly || !Raycast(query, filter, start, b, hit, visited, MAX_VISITED) || hit.t != FLT_MAX
+                || hit.pathCount <= 0)
+            {
+                continue;
+            }
+
+            const int count = hit.pathCount;
+            const int n = std::max(1, static_cast<int>(std::ceil(length / SAMPLE_STEP)));
+            Segment& segment = segments[static_cast<size_t>(i)];
+            segment.samples.reserve(static_cast<size_t>(n) + 1);
+            int hint = 0;
+
+            for (int k = 0; k <= n; ++k)
+            {
+                ProfileSample sample{};
+                sample.t = static_cast<float>(k) / static_cast<float>(n);
+                sample.pos = a + (b - a) * sample.t;
+                sample.onMesh = SurfaceAt(query, visited, count, hint, sample.pos, sample.area);
+
+                if (k == 0 || k == n)
+                {
+                    sample.pos = k == 0 ? a : b; // the ends stay exactly where they are
+                }
+
+                segment.samples.push_back(sample);
+            }
+
+            // Area changes (water, road, floor of a building, faction border): a point on each side of the border,
+            // found by bisection between the two samples.
+            std::vector<ProfileSample> refined;
+            refined.reserve(segment.samples.size() + 8);
+            refined.push_back(segment.samples[0]);
+            std::vector<bool> forced{true};
+
+            for (size_t k = 1; k < segment.samples.size(); ++k)
+            {
+                const ProfileSample& previous = segment.samples[k - 1];
+                const ProfileSample& current = segment.samples[k];
+
+                if (previous.onMesh && current.onMesh && previous.area != current.area)
+                {
+                    float lo = previous.t;
+                    float hi = current.t;
+                    ProfileSample before = previous;
+                    ProfileSample after = current;
+
+                    for (int iteration = 0; iteration < 6; ++iteration)
+                    {
+                        ProfileSample mid{};
+                        mid.t = (lo + hi) * 0.5f;
+                        mid.pos = a + (b - a) * mid.t;
+                        mid.onMesh = SurfaceAt(query, visited, count, hint, mid.pos, mid.area);
+
+                        if (!mid.onMesh)
+                        {
+                            break;
+                        }
+
+                        if (mid.area == previous.area)
+                        {
+                            lo = mid.t;
+                            before = mid;
+                        }
+                        else
+                        {
+                            hi = mid.t;
+                            after = mid;
+                        }
+                    }
+
+                    if (before.t > refined.back().t + 1e-4f)
+                    {
+                        refined.push_back(before);
+                        forced.push_back(true);
+                    }
+
+                    if (after.t < current.t - 1e-4f)
+                    {
+                        refined.push_back(after);
+                        forced.push_back(true);
+                    }
+                }
+
+                refined.push_back(current);
+                forced.push_back(k + 1 == segment.samples.size());
+            }
+
+            segment.samples = std::move(refined);
+            segment.keep = std::move(forced);
+
+            // Height bends between the forced points.
+            size_t from = 0;
+
+            for (size_t k = 1; k < segment.samples.size(); ++k)
+            {
+                if (segment.keep[k])
+                {
+                    KeepBends(segment.samples, from, k, error, segment.keep);
+                    from = k;
+                }
+            }
+        }
+
+        // Assemble; a path that doesn't fit gets a larger spacing, then no fill at all.
+        std::vector<Vector3> points;
+        std::vector<unsigned char> pointFlags;
+
+        for (int attempt = 0; attempt < 8; ++attempt)
+        {
+            const bool fill = attempt < 7;
+            points.clear();
+            pointFlags.clear();
+            points.push_back(path[0]);
+            pointFlags.push_back(flags[0]);
+
+            for (int i = 0; i + 1 < path.pointCount; ++i)
+            {
+                const Segment& segment = segments[static_cast<size_t>(i)];
+
+                if (!segment.samples.empty())
+                {
+                    const float length = path[i].DistanceTo(path[i + 1]);
+                    const ProfileSample* last = &segment.samples[0];
+
+                    for (size_t k = 1; k + 1 < segment.samples.size(); ++k)
+                    {
+                        const ProfileSample& sample = segment.samples[k];
+                        const bool gap = fill && (sample.t - last->t) * length >= spacing - SAMPLE_STEP * 0.5f;
+
+                        // Samples off the navmesh (a polygon edge between two samples) are never added.
+                        if (sample.onMesh && (segment.keep[k] || gap))
+                        {
+                            points.push_back(sample.pos);
+                            pointFlags.push_back(0);
+                            last = &sample;
+                        }
+                    }
+                }
+
+                points.push_back(path[i + 1]);
+                pointFlags.push_back(flags[i + 1]);
+            }
+
+            if (static_cast<int>(points.size()) <= path.maxSize)
+            {
+                std::copy(points.begin(), points.end(), path.points);
+                std::copy(pointFlags.begin(), pointFlags.end(), flags);
+                path.pointCount = static_cast<int>(points.size());
+                return;
+            }
+
+            spacing *= 2.0f;
+        }
+
+        // Even the bends don't fit: keep the plain path.
+    }
+    catch (...)
+    {
+    }
+}

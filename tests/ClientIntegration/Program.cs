@@ -195,6 +195,15 @@ Check(set.PendingTiles == 0 && southPath != null && southPath.Any(p => p.X < -52
 set = nav.SetObjects(map, [], [42ul]);
 Check(set.Accepted == 0, "SetObjects remove");
 Check(nav.SetObjects(4242, [gate]).Accepted == -1, "SetObjects without a static world");
+var plainPath = nav.GetPath(map, start, end);
+var detailed = nav.GetPath(map, start, end, PathFlags.Detail);
+Check(plainPath != null && detailed != null && detailed.Length > plainPath.Length * 5,
+      $"GetPath Detail {plainPath?.Length} -> {detailed?.Length} points");
+// 200 yards: 4 yard spacing by default, 2 asked (a path that doesn't fit iMaxPointPath gets a larger spacing).
+var near4 = nav.GetPath(map, Wow(-600, 0, -50), Wow(-400, 0, -50), PathFlags.Detail);
+var near2 = nav.GetPath(map, Wow(-600, 0, -50), Wow(-400, 0, -50), PathFlags.Detail, new PathTuning(WaypointSpacing: 2f));
+Check(near4 is { Length: >= 45 and <= 60 } && near2 is { Length: >= 90 and <= 110 },
+      $"Detail spacing {near4?.Length} / {near2?.Length} points");
 var body = nav.GetPathEx(map, start, end, PathFlags.ClearBody);
 Check(body is { Points.Length: >= 2 } && body.Flags.All(f => (f & PathPointFlags.Blocked) == 0), "GetPathEx ClearBody");
 

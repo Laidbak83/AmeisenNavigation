@@ -162,11 +162,19 @@ struct PathOptions
     bool roundCorners = false; // replace corners by arcs
     bool follow = false;       // reuse the corridor of the client's previous path on this map (GetPath only)
     bool clearBody = false;    // sweep a body along the path through the static world, go around what blocks it
+    bool detail = false;       // dense waypoints on the navmesh surface (see DetailPath)
+    float waypointSpacing = 4.0f;      // detail: longest distance between two waypoints
+    float waypointHeightError = 0.3f;  // detail: how far the surface may leave the line between two waypoints
     PathTuning tuning{};
     float bodyRadius = 0.4f;   // body swept by clearBody (static world, game objects included)
     float bodyHeight = 2.0f;
     float bodyStepHeight = 0.75f; // obstacles up to this height are walked over
 };
+
+/// Limits for the detail options (clamped).
+constexpr float MIN_WAYPOINT_SPACING = 1.0f;
+constexpr float MAX_WAYPOINT_SPACING = 100.0f;
+constexpr float MIN_WAYPOINT_HEIGHT_ERROR = 0.05f;
 
 /// Limits for PathTuning values (clamped).
 constexpr float MAX_WALL_MARGIN = 10.0f;
@@ -465,6 +473,14 @@ private:
     /// Off-mesh connections are left alone, nothing happens without a static world.
     void ClearBody(const dtNavMeshQuery* query, const dtQueryFilter* filter, int mapId, Path& path,
                    unsigned char* flags, const PathOptions& options) noexcept;
+
+    /// Dense waypoints along the walkable segments of a path (RD), all on the navmesh surface: where the surface
+    /// changes (water, road, building floor, faction border), where the height profile bends (crests, dips, stairs,
+    /// bridge humps: the surface never leaves the line between two waypoints by more than waypointHeightError) and at
+    /// most waypointSpacing apart. Corners and off-mesh connections stay as they are, new points have no flags. The
+    /// spacing grows if the path wouldn't fit.
+    static void DetailPath(const dtNavMeshQuery* query, const dtQueryFilter* filter, Path& path, unsigned char* flags,
+                           const PathOptions& options) noexcept;
 
     static void ShortcutPath(const dtNavMeshQuery* query, const dtQueryFilter* filter, Path& path) noexcept;
     static void CutAtStopDistance(const dtNavMeshQuery* query, const dtQueryFilter* filter, Path& path,

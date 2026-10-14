@@ -77,6 +77,7 @@ enum class PathRequestFlags : int
     FOLLOW = 1 << 9,             // PATH only: reuse the corridor of the connection's previous path
     RANDOMIZE = 1 << 10,         // PATH_EX only: random offsets like RANDOM_PATH
     CLEAR_BODY = 1 << 11,        // sweep a body along the path (static world), go around what blocks it
+    DETAIL = 1 << 12,            // dense waypoints on the surface: area changes, height bends, max spacing
 };
 
 /// Bumped whenever requests/responses are added or extended (reported by GET_CONFIG).
@@ -85,7 +86,7 @@ enum class PathRequestFlags : int
 ///   3: AVOID_WALLS, SHORTCUT, ROUND_CORNERS, FOLLOW, PathTuningData trailer, SET_AVOID_ZONES, STEER,
 ///      REPORT_STUCK, PATH_EX, CONFIGURE_FILTER cost 0 (forbid) / > 0 (allow areas excluded by default)
 ///   4: LINE_OF_SIGHT, SURFACES, SWEEP (static world), SET_OBJECTS (game objects at runtime), CLEAR_BODY and the
-///      PATH_EX point flags BYPASS / BLOCKED
+///      PATH_EX point flags BYPASS / BLOCKED, DETAIL and the PathDetailData trailer
 constexpr int PROTOCOL_VERSION = 4;
 
 constexpr bool HasFlag(int flags, PathRequestFlags flag) noexcept { return (flags & static_cast<int>(flag)) != 0; }
@@ -106,6 +107,14 @@ struct PathTuningData
     float cornerRadius;
     int cornerPoints;
     float stopDistance; // end this far before the target, at a point that sees it (0 = at the target)
+};
+
+/// Optional second trailer of PATH / RANDOM_PATH / PATH_EX (after PathTuningData) for DETAIL. Values <= 0 or
+/// non-finite use the server's defaults (fWaypointSpacing, fWaypointHeightError).
+struct PathDetailData
+{
+    float spacing;     // longest distance between two waypoints
+    float heightError; // how far the surface may leave the line between two waypoints
 };
 
 /// PATH_EX response header.
@@ -343,6 +352,7 @@ struct ConfigureFilterHeader
 // Layout checks, the C# client relies on these exact sizes/offsets.
 static_assert(sizeof(PathRequestData) == 32);
 static_assert(sizeof(PathTuningData) == 16 && offsetof(PathTuningData, stopDistance) == 12);
+static_assert(sizeof(PathDetailData) == 8);
 static_assert(sizeof(MoveRequestData) == 28);
 static_assert(sizeof(CastRayData) == 28);
 static_assert(sizeof(CastRayExResponse) == 32);

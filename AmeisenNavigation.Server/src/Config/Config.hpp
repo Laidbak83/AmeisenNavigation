@@ -40,6 +40,8 @@ struct AmeisenNavConfig
     float stuckZoneCost = 8.0f;   // REPORT_STUCK zones: travel cost multiplier
     float stuckZoneRadius = 3.0f; // REPORT_STUCK zones: radius when the report gives none
     float waterCost = 1.6f;  // water, ocean
+    float waypointHeightError = 0.3f; // DETAIL: how far the surface may leave the line between two waypoints
+    float waypointSpacing = 4.0f;     // DETAIL: longest distance between two waypoints
     int bezierCurvePoints = 8;
     int catmullRomSplinePoints = 4;
     int cornerPoints = 4; // ROUND_CORNERS points per arc
@@ -379,6 +381,8 @@ private:
             {"iCornerPoints", std::ref(cornerPoints)},
             {"iMaxClients", std::ref(maxClients)},
             {"fBodyHeight", std::ref(bodyHeight)},
+            {"fWaypointSpacing", std::ref(waypointSpacing)},
+            {"fWaypointHeightError", std::ref(waypointHeightError)},
             {"fBodyRadius", std::ref(bodyRadius)},
             {"fBodyStepHeight", std::ref(bodyStepHeight)},
             {"iWorldCacheTiles", std::ref(worldCacheTiles)},

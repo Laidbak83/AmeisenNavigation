@@ -80,6 +80,21 @@ namespace AmeisenNavigation.Client
     }
 
     [StructLayout(LayoutKind.Sequential)]
+    internal struct PathDetailData
+    {
+        public float Spacing;
+        public float HeightError;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct PathRequestWithDetail
+    {
+        public PathRequestData Request;
+        public PathTuningData Tuning;
+        public PathDetailData Detail;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
     internal struct PathExResponseHeader
     {
         public int PointCount;
@@ -236,6 +251,7 @@ namespace AmeisenNavigation.Client
         [
             (nameof(PathRequestData), Marshal.SizeOf<PathRequestData>(), 32),
             (nameof(PathTuningData), Marshal.SizeOf<PathTuningData>(), 16),
+            (nameof(PathDetailData), Marshal.SizeOf<PathDetailData>(), 8),
             (nameof(PathExResponseHeader), Marshal.SizeOf<PathExResponseHeader>(), 8),
             (nameof(AvoidZonesHeader), Marshal.SizeOf<AvoidZonesHeader>(), 8),
             (nameof(AvoidZoneData), Marshal.SizeOf<AvoidZoneData>(), 20),

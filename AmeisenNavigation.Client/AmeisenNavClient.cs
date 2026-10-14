@@ -830,6 +830,23 @@ namespace AmeisenNavigation.Client
                 return plain;
             }
 
+            if (tuning.Value.WaypointSpacing > 0f || tuning.Value.WaypointHeightError > 0f)
+            {
+                var withDetail = new PathRequestWithDetail
+                {
+                    Request = request,
+                    Tuning = ToWire(tuning.Value),
+                    Detail = new PathDetailData
+                    {
+                        Spacing = tuning.Value.WaypointSpacing,
+                        HeightError = tuning.Value.WaypointHeightError,
+                    },
+                };
+                byte[] detailed = new byte[Marshal.SizeOf<PathRequestWithDetail>()];
+                MemoryMarshal.Write(detailed, in withDetail);
+                return detailed;
+            }
+
             var withTuning = new PathRequestWithTuning { Request = request, Tuning = ToWire(tuning.Value) };
             byte[] buffer = new byte[Marshal.SizeOf<PathRequestWithTuning>()];
             MemoryMarshal.Write(buffer, in withTuning);

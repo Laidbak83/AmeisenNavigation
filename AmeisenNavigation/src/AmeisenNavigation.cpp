@@ -220,6 +220,11 @@ bool AmeisenNavigation::GetPath(size_t clientId, int mapId, const Vector3& start
         ClearBody(ctx.query, ctx.filter, mapId, path, flags, *options);
     }
 
+    if (options && options->detail)
+    {
+        DetailPath(ctx.query, ctx.filter, path, flags, *options);
+    }
+
     if (pointFlags)
     {
         std::copy(flags, flags + path.pointCount, pointFlags);
@@ -329,6 +334,11 @@ bool AmeisenNavigation::GetRandomPath(size_t clientId, int mapId, const Vector3&
     if (options && options->clearBody)
     {
         ClearBody(ctx.query, ctx.filter, mapId, path, flags, *options);
+    }
+
+    if (options && options->detail)
+    {
+        DetailPath(ctx.query, ctx.filter, path, flags, *options);
     }
 
     if (pointFlags)

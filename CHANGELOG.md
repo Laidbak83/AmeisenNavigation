@@ -41,6 +41,16 @@ static world". Re-export to get the `.anw` and `gameobjects.ano` files.
 - Navmesh requests hold a per map readers/writer lock (re-entrant for a thread, writers wait for running requests);
   replacing tiles takes it exclusively.
 
+### Detailed paths
+
+- Path flag `4096` DETAIL (PATH, RANDOM_PATH, PATH_EX): dense waypoints on the navmesh surface. Each segment's height
+  profile is sampled every half yard on the polygons the navmesh raycast walks (the right floor under bridges and in
+  buildings); waypoints go on both sides of every change of ground (bisection to the polygon border: water, road,
+  building floor, faction border), where the profile bends (Douglas-Peucker on the heights, `fWaypointHeightError`)
+  and at most `fWaypointSpacing` apart. Corners and off-mesh connections keep their place and flags; a path that
+  wouldn't fit gets a larger spacing. Optional `PathDetailData` trailer (spacing, height error) per request; C#:
+  `PathFlags.Detail`, `PathTuning.WaypointSpacing`/`WaypointHeightError`.
+
 ### Fixed
 
 - A data race in glibc's `tzset` when several threads read archives (miniz converted ZIP entry times nobody uses):
