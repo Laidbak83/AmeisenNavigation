@@ -90,6 +90,9 @@ private:
     void HandleSteer(ClientHandler* handler, AnTcpMessageType type, const void* data, int size);
     void HandleReportStuck(ClientHandler* handler, AnTcpMessageType type, const void* data, int size);
     void HandlePathEx(ClientHandler* handler, AnTcpMessageType type, const void* data, int size);
+    void HandleLineOfSight(ClientHandler* handler, AnTcpMessageType type, const void* data, int size);
+    void HandleSurfaces(ClientHandler* handler, AnTcpMessageType type, const void* data, int size);
+    void HandleSweep(ClientHandler* handler, AnTcpMessageType type, const void* data, int size);
 
     /// Path refinement options from request flags and an optional tuning trailer (nullptr = defaults).
     PathOptions MakePathOptions(int flags, const PathTuningData* tuning) const noexcept;

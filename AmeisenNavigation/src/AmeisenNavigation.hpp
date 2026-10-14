@@ -34,6 +34,7 @@
 #include "Utils/PolyPosition.hpp"
 #include "Utils/Vector3.hpp"
 #include "Utils/VectorUtils.hpp"
+#include "World/StaticWorld.hpp"
 
 /// Random float in [0, 1) for Detour's random point functions. One generator per thread.
 inline float GetRandomFloat() noexcept
@@ -119,6 +120,8 @@ struct AmeisenNavigationSettings
     std::filesystem::path offMeshFile;   // off-mesh connections in TrinityCore's offmesh.txt format (optional)
     float autoDropHeight = 0.0f;         // one way drop-down links from ledges up to this height (0 = off)
     float autoDropReach = 2.0f;          // how far beyond a ledge the landing point may be
+    std::filesystem::path worldFolder;   // static worlds (.anw), empty = meshFolder
+    size_t worldCacheTiles = 48;         // static world tiles kept in memory per map
 };
 
 /// A unit near a steering client (WoW coordinates).
@@ -213,6 +216,7 @@ class AmeisenNavigation
     std::unordered_map<size_t, std::shared_ptr<AmeisenNavClient>> Clients;
 
     AvoidZoneStore GlobalZones;
+    World::WorldCache Worlds;
 
     mutable std::mutex OffMeshStatsMutex;
     std::unordered_map<int, int> AddedOffMeshLinks;
@@ -306,6 +310,23 @@ public:
     /// avoid zones and the navmesh borders (DetourCrowd obstacle avoidance), and the position it leads to.
     bool Steer(size_t clientId, int mapId, const Vector3& position, const Vector3& velocity, const Vector3& target,
                float maxSpeed, float radius, float deltaTime, std::span<const SteerUnit> units, SteerResult& result);
+
+    // ── Static world (.anw files next to the navmeshes): collision geometry with provenance ──
+
+    /// The map's static world, nullptr if it has none.
+    World::StaticWorld* GetWorld(int mapId) { return Worlds.Get(mapId); }
+
+    /// Line of sight against the collision geometry (liquids never block). Returns false if the map has no static
+    /// world there (result unknown), else hit tells what blocks the view.
+    bool LineOfSight(int mapId, const Vector3& start, const Vector3& end, uint32_t ignore, World::Hit& hit);
+
+    /// Every surface under (x, y) between zTop and zBottom with its provenance, highest first, and the AreaTable id.
+    bool GetSurfaces(int mapId, float x, float y, float zTop, float zBottom, uint32_t ignore,
+                     std::vector<World::Surface>& surfaces, uint32_t& areaId);
+
+    /// Move a standing body from start to end (feet positions): the first geometry it runs into above stepHeight.
+    bool SweepBody(int mapId, const Vector3& start, const Vector3& end, float radius, float height, float stepHeight,
+                   uint32_t ignore, World::Hit& hit);
 
     void SmoothPathChaikinCurve(const Path& input, Path& output) const noexcept;
     void SmoothPathCatmullRom(const Path& input, Path& output, int points, float alpha) const noexcept;

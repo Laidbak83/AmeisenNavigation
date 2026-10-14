@@ -25,6 +25,7 @@
       <Filter>Headerdateien</Filter>
     </ClInclude>
     <ClInclude Include="src/NavMeshPly.hpp" />
+    <ClInclude Include="src/AnpWorld.hpp" />
   </ItemGroup>
   <ItemGroup>
     <None Include="src\miniz\LICENSE" />

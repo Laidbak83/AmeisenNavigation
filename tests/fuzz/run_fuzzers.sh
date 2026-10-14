@@ -18,7 +18,7 @@ fi
 
 status=0
 
-for target in Tile Anp Exporter Protocol; do
+for target in Tile Anp Exporter Protocol World; do
     bin="$BUILD/bin/Fuzz$target"
     name="$(echo "$target" | tr '[:upper:]' '[:lower:]')"
     [ -x "$bin" ] || continue

@@ -314,6 +314,29 @@ TEST_CASE(TcData_ModelsAreTransformedLikeTrinityCore)
     CHECK(h >= top - 0.25f && h <= top + 1.0f);
 }
 
+TEST_CASE(TcData_StaticWorldSources)
+{
+    REQUIRE(Get().report.setupOk);
+    CHECK_EQ(Get().report.maps[0].worldTiles, 2);
+    std::vector<World::Surface> surfaces;
+    uint32_t area = 0;
+    const auto top = [&](const Vector3& p) {
+        REQUIRE(Navigation().GetSurfaces(MAP, p.x, p.y, p.z + 20.0f, p.z - 20.0f, 0, surfaces, area));
+        REQUIRE(!surfaces.empty());
+        return surfaces[0].source;
+    };
+
+    // vmap spawns keep their ids (fence 1, platform 3), the game object its display id, .map chunks their areas.
+    CHECK_EQ(top(FENCE), AnpWorld::MakeSource(AnpWorld::SourceKind::WMO, 1));
+    CHECK_EQ(top(PLATFORM), AnpWorld::MakeSource(AnpWorld::SourceKind::DOODAD, 3));
+    CHECK_EQ(top(OBJECT), AnpWorld::MakeSource(AnpWorld::SourceKind::GAME_OBJECT, OBJECT_DISPLAY_ID));
+    top({DISTRICT.x, DISTRICT.y, SlopedHeight(DISTRICT.x, DISTRICT.y)});
+    CHECK_EQ(area, 2u);
+    CHECK(AnpWorld::KindOf(surfaces[0].source) == AnpWorld::SourceKind::TERRAIN);
+    top({WATER.x, WATER.y, 8.0f});
+    CHECK(surfaces[0].liquid);
+}
+
 TEST_CASE(TcData_RejectsBrokenFiles)
 {
     // Old version and truncated files are rejected, no prefix of a valid file crashes the parsers.

@@ -534,6 +534,44 @@ TEST_CASE(Exporter_DoodadCollision)
     CHECK_EQ(AreaAt(CONTINENT, {DOODAD_POS.x, DOODAD_POS.y, top + CH}), DOODAD);
 }
 
+TEST_CASE(Exporter_StaticWorldProvenance)
+{
+    using AnpWorld::MakeSource;
+    using AnpWorld::SourceKind;
+    REQUIRE(Get().dataOk);
+    CHECK(std::filesystem::exists(Get().outputDir / "600.anw"));
+    CHECK(std::filesystem::exists(Get().outputDir / "601.anw"));
+    CHECK_EQ(Get().Map(CONTINENT)->worldTiles, 2);
+
+    std::vector<World::Surface> surfaces;
+    uint32_t area = 0;
+    const auto top = [&](const Vector3& p) {
+        REQUIRE(Navigation().GetSurfaces(static_cast<int>(CONTINENT), p.x, p.y, p.z + 50.0f, p.z - 50.0f, 0, surfaces,
+                                         area));
+        REQUIRE(!surfaces.empty());
+        return surfaces[0];
+    };
+
+    // Placements keep their unique ids, terrain and liquids their kinds, chunks their AreaTable ids.
+    CHECK_EQ(top(WMO_POS).source, MakeSource(SourceKind::WMO, 1000));
+    CHECK_NEAR(top(WMO_POS).z, WMO_POS.z + WMO_TOP, 0.05);
+    CHECK_EQ(top(DOODAD_POS).source, MakeSource(SourceKind::DOODAD, 2000));
+    CHECK(AnpWorld::KindOf(top({PLAIN.x, PLAIN.y, TerrainHeight(PLAIN.x, PLAIN.y)}).source) == SourceKind::TERRAIN);
+    CHECK_NEAR(surfaces[0].z, TerrainHeight(PLAIN.x, PLAIN.y), 0.05);
+    CHECK(top({WATER.x, WATER.y, 10.0f}).liquid);
+    CHECK(AnpWorld::KindOf(surfaces[0].source) == SourceKind::LIQUID);
+    top({CITY.x, CITY.y, TerrainHeight(CITY.x, CITY.y)});
+    CHECK_EQ(area, AREA_DISTRICT);
+    top({HORDE.x, HORDE.y, TerrainHeight(HORDE.x, HORDE.y)});
+    CHECK_EQ(area, AREA_HORDE_ZONE);
+
+    // The dungeon's global WMO.
+    REQUIRE(Navigation().GetSurfaces(static_cast<int>(DUNGEON), 40.0f, 40.0f, DUNGEON_FLOOR_Z + 10.0f,
+                                     DUNGEON_FLOOR_Z - 10.0f, 0, surfaces, area));
+    REQUIRE(!surfaces.empty());
+    CHECK(AnpWorld::KindOf(surfaces[0].source) == SourceKind::WMO);
+}
+
 TEST_CASE(Exporter_WmoOnlyDungeon)
 {
     CHECK(OnSurface(HeightAt(DUNGEON, 40.0f, 40.0f, DUNGEON_FLOOR_Z + 1.0f), DUNGEON_FLOOR_Z));
@@ -738,6 +776,14 @@ TEST_CASE(Exporter_GameObjectsBlockTheWay)
     CHECK(!crossing(e, f, length));
     CHECK(length > e.DistanceTo(f) + 15.0f);
     CHECK(crossing(ground(turned.x + 3.0f, turned.y + 10.0f), ground(turned.x + 3.0f, turned.y - 10.0f), length));
+
+    // In the static world the fence is a game object with its display id.
+    std::vector<World::Surface> surfaces;
+    uint32_t area = 0;
+    REQUIRE(nav.GetSurfaces(static_cast<int>(CONTINENT), fence.x, fence.y, fence.z + 10.0f, fence.z - 10.0f, 0,
+                            surfaces, area));
+    REQUIRE(!surfaces.empty());
+    CHECK_EQ(surfaces[0].source, AnpWorld::MakeSource(AnpWorld::SourceKind::GAME_OBJECT, FENCE_DISPLAY_ID));
 }
 
 TEST_CASE(GameObjects_SpawnFileFormats)

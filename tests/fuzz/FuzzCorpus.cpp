@@ -1,5 +1,5 @@
 // Writes seed corpora for the fuzzers: FuzzCorpus <output dir>
-// Creates <dir>/{tile,anp,exporter,protocol} from the synthetic test world and synthetic client files.
+// Creates <dir>/{tile,anp,exporter,protocol,world} from the synthetic test world and synthetic client files.
 
 #include <cstdio>
 #include <filesystem>
@@ -191,6 +191,12 @@ void ProtocolSeeds(const fs::path& dir)
     AddPacket(all, MessageType::GET_HEIGHT, GetHeightData{map, a});
     Write(dir / "protocol" / "requests", all);
 
+    Bytes world;
+    AddPacket(world, MessageType::LINE_OF_SIGHT, LineOfSightData{map, 0, wow(-350.0f, 1.7f, -300.0f), b});
+    AddPacket(world, MessageType::SWEEP, SweepData{map, 4, a, b, 0.5f, 2.0f, 0.5f});
+    AddPacket(world, MessageType::SURFACES, SurfacesRequestData{map, 8, a.x, a.y, 50.0f, -50.0f});
+    Write(dir / "protocol" / "world", world);
+
     Bytes explore;
     ExplorePolyRequestHeader header{map, 0, a, 40.0f, 4};
     Bytes payload;
@@ -225,6 +231,30 @@ void ProtocolSeeds(const fs::path& dir)
 }
 } // namespace
 
+void WorldSeeds(const fs::path& dir)
+{
+    // Tiles of the test world's static world.
+    AnpWorld::WorldReader reader(TestWorld::Get().meshDir / AnpWorld::FileName(TestWorld::MAP_ID));
+
+    for (const auto& [x, y] : {std::pair{32, 32}, std::pair{33, 32}})
+    {
+        if (const auto tile = reader.ReadTile(x, y))
+        {
+            const auto bytes = AnpWorld::Serialize(*tile);
+            Write(dir / "world" / std::format("{}_{}", x, y), Bytes(bytes.begin(), bytes.end()));
+        }
+    }
+
+    AnpWorld::Tile small;
+    small.adtX = small.adtY = 32;
+    small.verts = {0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 1, 1};
+    small.indices = {0, 1, 2, 1, 3, 2};
+    small.areas = {1, 0};
+    small.sources = {0, (1u << 28) | 5};
+    const auto bytes = AnpWorld::Serialize(small);
+    Write(dir / "world" / "small", Bytes(bytes.begin(), bytes.end()));
+}
+
 int main(int argc, char** argv)
 {
     if (argc < 2)
@@ -238,6 +268,7 @@ int main(int argc, char** argv)
     TileSeeds(dir);
     ExporterSeeds(dir);
     ProtocolSeeds(dir);
+    WorldSeeds(dir);
     std::printf("Seed corpora written to %s\n", dir.string().c_str());
     return 0;
 }

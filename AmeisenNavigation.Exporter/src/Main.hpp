@@ -32,6 +32,7 @@
 #include "Mpq/CachedFileReader.hpp"
 #include "Mpq/MpqManager.hpp"
 #include "Processors/AdtTileProcessor.hpp"
+#include "Processors/WorldBuilder.hpp"
 #include "Utils/Structure.hpp"
 #include "Utils/Tri.hpp"
 #include "Utils/Vector3.hpp"

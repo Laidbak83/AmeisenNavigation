@@ -20,6 +20,7 @@ struct ExportOptions
     int tileY = -1;
     bool debug = false;              // area debug images
     bool skipExisting = false;       // don't rebuild maps whose .anp already exists
+    bool writeWorld = true;          // also write the static world (.anw: collision geometry with sources)
     TileBuildConfig buildConfig{};
 
     /// Game object spawns whose collision is added (see GameObjects.hpp for the file format), empty = none.
@@ -54,6 +55,8 @@ struct MapExportStats
     size_t doodadPlacements = 0;
     size_t gameObjects = 0;         // spawns with collision added
     size_t gameObjectsMissing = 0;  // spawns whose model wasn't found
+    int worldTiles = 0;      // .anw tiles written
+    size_t worldBytes = 0;   // .anw size (compressed tiles)
     int tilesBuilt = 0;
     int tilesFailed = 0;
 };

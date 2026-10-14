@@ -292,6 +292,7 @@ bool LoadClientData(CachedFileReader& reader, ClientData& data, bool mapsOnly)
 struct MapData
 {
     Structure geometry;
+    ChunkAreaMap chunkAreas;
     WaterMap water;
     RoadMap roads;
     CityMap cities;
@@ -301,7 +302,7 @@ struct MapData
 };
 
 /// Extract everything the navmesh needs from one ADT into the map wide containers.
-void ExtractAdt(Adt* adt, CachedFileReader& reader, MapData& map, const ClientData& client)
+void ExtractAdt(Adt* adt, int adtX, int adtY, CachedFileReader& reader, MapData& map, const ClientData& client)
 {
     Structure geometry;
 
@@ -317,6 +318,11 @@ void ExtractAdt(Adt* adt, CachedFileReader& reader, MapData& map, const ClientDa
         ExtractRoadCoverage(adt, cx, cy, &map.roads, roadTextureIds);
         ExtractCityCoverage(adt, cx, cy, &map.cities, client.areas.cities);
         ExtractFactionCoverage(adt, cx, cy, &map.factions, client.areas.factions);
+
+        if (const MCNK* mcnk = adt->Mcnk(static_cast<unsigned int>(cx), static_cast<unsigned int>(cy)))
+        {
+            map.chunkAreas.Set(adtX, adtY, cy, cx, mcnk->areaid);
+        }
     }
 
     // Objects are extracted once per placement (uniqueId) and never clipped at ADT borders.
@@ -492,6 +498,31 @@ MapExportStats BuildMap(unsigned int mapId, const std::string& mapName, const Ex
 
     stats.exported = true;
 
+    if (options.writeWorld)
+    {
+        std::vector<std::pair<int, int>> worldAdts;
+
+        for (const auto& adt : adts)
+        {
+            worldAdts.emplace_back(adt.x, adt.y);
+        }
+
+        WorldBuildStats world;
+
+        if (WriteWorld(map.geometry, worldAdts, map.chunkAreas, static_cast<int>(mapId), options.outputDir, &world))
+        {
+            stats.worldTiles = world.tiles;
+            stats.worldBytes = world.bytes;
+            LogI(std::format("[{}] Saved {} ({} tiles, {} triangles, {:.1f} MB)", mapName,
+                             AnpWorld::FileName(static_cast<int>(mapId)), world.tiles, world.triangles,
+                             world.bytes / (1024.0 * 1024.0)));
+        }
+        else
+        {
+            LogW("[", mapName, "] failed to save ", AnpWorld::FileName(static_cast<int>(mapId)));
+        }
+    }
+
     const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - mapStart).count();
     LogS(std::format("[{}] Saved {} ({} tiles, {:.1f} MB) in {}", mapName, Anp::FileName(static_cast<int>(mapId)),
                      writer.GetTileCount(), writer.GetStoredBytes() / (1024.0 * 1024.0),
@@ -592,7 +623,7 @@ MapExportStats ExportMap(unsigned int mapId, const std::string& mapName, const E
                 continue;
             }
 
-            ExtractAdt(adt, reader, map, client);
+            ExtractAdt(adt, coord.x, coord.y, reader, map, client);
 
             const int done = extracted.fetch_add(1, std::memory_order_relaxed) + 1;
 
@@ -751,6 +782,14 @@ MapExportStats ExportTcMap(int mapId, const TcData::MapFiles& files, const Expor
         Structure geometry;
         TcData::AddMapTile(*tile, &geometry, &map.water, &map.cities, &map.factions, client.areas.cities,
                            client.areas.factions);
+
+        for (int r = 0; r < 16; ++r)
+        {
+            for (int c = 0; c < 16; ++c)
+            {
+                map.chunkAreas.Set(coord.x, coord.y, r, c, tile->areas[static_cast<size_t>(r)][static_cast<size_t>(c)]);
+            }
+        }
         geometry.Clean();
 
         const std::lock_guard lock(map.geometry.mutex);
@@ -801,6 +840,9 @@ MapExportStats ExportTcMap(int mapId, const TcData::MapFiles& files, const Expor
         TcData::AddWorldModel(
             *model, [&](const Vector3& v) { return TcData::SpawnToWow(spawn, rotation, v); }, &geometry,
             model->isM2 ? DOODAD : WMO, client.liquidTypes);
+        geometry.TagSources(0, AnpWorld::MakeSource(model->isM2 ? AnpWorld::SourceKind::DOODAD
+                                                                : AnpWorld::SourceKind::WMO,
+                                                    spawn.id));
         geometry.Clean();
 
         const std::lock_guard lock(map.geometry.mutex);
@@ -850,9 +892,12 @@ MapExportStats ExportTcMap(int mapId, const TcData::MapFiles& files, const Expor
                            }
 
                            const Matrix4x4 transform = GameObjects::SpawnTransform(spawn);
+                           const size_t first = objects->tris.size();
                            TcData::AddWorldModel(
                                *model, [&](const Vector3& v) { return transform.Transform(v); }, objects, DOODAD,
                                client.liquidTypes);
+                           objects->TagSources(first, AnpWorld::MakeSource(AnpWorld::SourceKind::GAME_OBJECT,
+                                                                           spawn.displayId));
                            return true;
                        });
     }

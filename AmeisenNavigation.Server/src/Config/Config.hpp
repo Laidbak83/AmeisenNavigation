@@ -42,6 +42,7 @@ struct AmeisenNavConfig
     int cornerPoints = 4; // ROUND_CORNERS points per arc
     int clientIdleTimeoutSec = 0; // disconnect silent clients after this many seconds, 0 = never
     int maxClients = 1024;        // simultaneous connections (one thread each), 0 = unlimited
+    int worldCacheTiles = 48;     // static world tiles (.anw) kept in memory per map
     int statsIntervalSec = 300;   // log request counts/latencies this often (only if there were requests), 0 = off
     int maxPointPath = 512;
     int maxPolyPath = 2048;
@@ -59,6 +60,7 @@ struct AmeisenNavConfig
     std::string preloadMaps = ""; // comma separated map ids loaded at startup, e.g. "0,1,530,571"
     std::string offMeshFile = "";    // off-mesh connections, TrinityCore offmesh.txt format (empty = none)
     std::string avoidZonesFile = ""; // REPORT_STUCK zones are kept in this file (empty = not persisted)
+    std::string worldPath = "";   // static worlds (.anw files), empty = sMmapsPath
     std::string parentMaps = "";  // MMAP files of a child map fall back to its parent's: "child:parent,...", e.g. "2552:0"
 
     // ── Serialization ────────────────────────────────────────────────
@@ -373,6 +375,7 @@ private:
             {"iClientIdleTimeoutSec", std::ref(clientIdleTimeoutSec)},
             {"iCornerPoints", std::ref(cornerPoints)},
             {"iMaxClients", std::ref(maxClients)},
+            {"iWorldCacheTiles", std::ref(worldCacheTiles)},
             {"iStatsIntervalSec", std::ref(statsIntervalSec)},
             {"iMaxPointPath", std::ref(maxPointPath)},
             {"iMaxPolyPath", std::ref(maxPolyPath)},
@@ -386,6 +389,7 @@ private:
             {"sMmapsPath", std::ref(mmapsPath)},
             {"sOffMeshFile", std::ref(offMeshFile)},
             {"sParentMaps", std::ref(parentMaps)},
+            {"sWorldPath", std::ref(worldPath)},
             {"sPreloadMaps", std::ref(preloadMaps)},
         };
     }

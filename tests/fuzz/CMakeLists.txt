@@ -3,6 +3,7 @@
 #   FuzzAnp       .anp archive loading
 #   FuzzExporter  ADT/WMO/M2/WDT/DBC parsers of the exporter
 #   FuzzProtocol  request handlers of the server (every request gets exactly one response)
+#   FuzzWorld     static world tiles (.anw), BVH and queries
 #   FuzzCorpus    writes the seed corpora
 
 function(anav_add_fuzzer name)
@@ -13,6 +14,7 @@ endfunction()
 
 anav_add_fuzzer(FuzzTile anav_pack)
 anav_add_fuzzer(FuzzAnp anav_core)
+anav_add_fuzzer(FuzzWorld anav_core)
 anav_add_fuzzer(FuzzProtocol anav_server_lib anav_exporter_core)
 
 if(TARGET anav_exporter_lib)

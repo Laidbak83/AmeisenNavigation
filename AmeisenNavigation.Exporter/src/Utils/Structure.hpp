@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cstdint>
 #include <cmath>
 #include <fstream>
 #include <iomanip>
@@ -19,6 +20,8 @@ struct Structure
     std::vector<Vector3> verts;
     std::vector<Tri> tris;
     std::vector<TriAreaId> triTypes;
+    /// Where each triangle comes from (AnpWorld::MakeSource), shorter than tris = the rest is unknown (0, terrain).
+    std::vector<uint32_t> triSources;
     float bbMin[3]{0.0f};
     float bbMax[3]{0.0f};
 
@@ -33,8 +36,29 @@ struct Structure
         triTypes.emplace_back(t);
     }
 
+    /// Source of triangle i (0 if unknown).
+    inline uint32_t SourceOf(size_t i) const noexcept { return i < triSources.size() ? triSources[i] : 0u; }
+
+    /// Mark the triangles from `firstTri` on as coming from `source`.
+    inline void TagSources(size_t firstTri, uint32_t source)
+    {
+        triSources.resize(tris.size(), 0u);
+        std::fill(triSources.begin() + static_cast<std::ptrdiff_t>(std::min(firstTri, tris.size())),
+                  triSources.end(), source);
+    }
+
     inline void Append(const Structure& other) noexcept
     {
+        if (!other.triSources.empty() || !triSources.empty())
+        {
+            triSources.resize(tris.size(), 0u);
+
+            for (size_t i = 0; i < other.tris.size(); ++i)
+            {
+                triSources.push_back(other.SourceOf(i));
+            }
+        }
+
         const int triOffset = static_cast<int>(verts.size());
         verts.insert(verts.end(), other.verts.begin(), other.verts.end());
         tris.reserve(tris.size() + other.tris.size());
@@ -67,6 +91,8 @@ struct Structure
             };
 
             size_t kept = 0;
+            const bool sources = !triSources.empty();
+            triSources.resize(sources ? tris.size() : 0, 0u);
 
             for (size_t i = 0; i < tris.size() && i < triTypes.size(); ++i)
             {
@@ -74,12 +100,19 @@ struct Structure
                 {
                     tris[kept] = tris[i];
                     triTypes[kept] = triTypes[i];
+
+                    if (sources)
+                    {
+                        triSources[kept] = triSources[i];
+                    }
+
                     kept++;
                 }
             }
 
             tris.resize(kept);
             triTypes.resize(kept);
+            triSources.resize(sources ? kept : 0);
         }
 
         std::vector<bool> isVertexUsed(verts.size(), false);
@@ -124,6 +157,7 @@ struct Structure
         std::unordered_set<Tri, Tri::Hash> seenSet;
         std::vector<Tri> uniqueTris;
         std::vector<TriAreaId> uniqueTriangleAreaIds;
+        std::vector<uint32_t> uniqueSources;
 
         for (unsigned int i = 0; i < tris.size(); ++i)
         {
@@ -134,12 +168,18 @@ struct Structure
             {
                 uniqueTris.emplace_back(tri);
                 uniqueTriangleAreaIds.emplace_back(triTypes[i]);
+
+                if (!triSources.empty())
+                {
+                    uniqueSources.push_back(triSources[i]);
+                }
             }
         }
 
         verts = std::move(filteredVertices);
         tris = std::move(uniqueTris);
         triTypes = std::move(uniqueTriangleAreaIds);
+        triSources = std::move(uniqueSources);
     }
 
     inline void CleanOutOfBounds(float* bmin, float* bmax) noexcept
@@ -161,6 +201,7 @@ struct Structure
 
         std::vector<Tri> filteredTriangles;
         std::vector<TriAreaId> filteredTriTypes;
+        std::vector<uint32_t> filteredSources;
 
         for (size_t i = 0; i < tris.size(); ++i)
         {
@@ -173,12 +214,18 @@ struct Structure
             {
                 filteredTriangles.emplace_back(Tri{v1, v2, v3});
                 filteredTriTypes.emplace_back(triTypes[i]);
+
+                if (!triSources.empty())
+                {
+                    filteredSources.push_back(SourceOf(i));
+                }
             }
         }
 
         verts = std::move(filteredVertices);
         tris = std::move(filteredTriangles);
         triTypes = std::move(filteredTriTypes);
+        triSources = std::move(filteredSources);
     }
 
     inline void ExportDebugObjFile(const char* filePath) noexcept

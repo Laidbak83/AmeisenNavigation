@@ -21,6 +21,10 @@ TCP navigation server and navmesh exporter for World of Warcraft bots (built for
   format and automatic drop-down links from ledges
 - Avoid zones per client (danger areas), shared stuck reports (places bots got stuck are avoided by everyone), terrain
   rules (forbid water for a bot that can't swim, allow steep slopes), local steering around other units
+- Static world: the collision geometry next to the navmesh with the provenance of every triangle (terrain, WMO, M2,
+  liquid, game object, with their ids): line of sight for spells (trees optional), every surface under a point
+  (decks, bridges, floors, water) with the zone's AreaTable id, a standing body swept along a segment (what it runs
+  into above step height)
 - Move small deltas along the navmesh surface, movement raycasts (with hit position and wall normal)
 - Ground height queries that pick the right floor (bridges, buildings, caves)
 - Random points on the mesh / around a position
@@ -59,6 +63,8 @@ docker run -d -p 47110:47110 -v /srv/meshes:/meshes:ro ameisennav
 | `sMmapsPath` | `C:\meshes\` (`./meshes/` on Linux) | Folder with the `.anp` or `.mmap`/`.mmtile` files |
 | `bUseAnpFileFormat` | `0` | `1` = ANP navmeshes from the exporter, `0` = MMAPs |
 | `iMmapFormat` | `0` | `0` auto detect, `1` TrinityCore 3.3.5a, `2` SkyFire 5.4.8, `3` TrinityCore master (MMAP v16), `-1` custom patterns |
+| `sWorldPath` | empty | Folder of the static worlds (`.anw`), empty = `sMmapsPath` |
+| `iWorldCacheTiles` | `48` | Static world tiles kept in memory per map |
 | `sParentMaps` | empty | MMAPs: `child:parent` map pairs (Map.db2 ParentMapID), a child map without its own files uses the parent's, e.g. `2552:0` |
 | `sCustomMmapPattern` / `sCustomMmtilePattern` | TC 3.3.5a names | `std::format` patterns for `iMmapFormat=-1` (args: mapId, x, y) |
 | `sPreloadMaps` | empty | Comma separated map ids loaded at startup, e.g. `0,1,530,571` |
@@ -98,6 +104,8 @@ AmeisenNavigation.Exporter --tc-data <folder> --output <mesh folder> [options]  
   -s, --skip-existing  Don't rebuild maps whose .anp file already exists (resume an interrupted export)
   -d, --debug          Debug logging + area debug images (<output>/debug/area_<map>_<x>_<y>.bmp)
   -l, --list-maps      List the maps in Map.dbc (or the maps with files in --tc-data)
+      --no-world       Don't write the static world (.anw: collision geometry with provenance, ~350 KB per ADT of
+                       terrain plus the models, needed for LINE_OF_SIGHT, SURFACES and SWEEP)
   -g, --gameobjects <file> Add the collision of game object spawns (see Game objects)
       --area-table <csv>   With --tc-data: AreaTable as CSV, for faction and city areas
       --liquid-types <csv> With --tc-data: LiquidType as CSV, for the kind of WMO liquids
@@ -250,6 +258,9 @@ request gets exactly one response with the same type. Positions are WoW coordina
 | `12` STEER | `int mapId, Vector3 position, Vector3 velocity, Vector3 target, float maxSpeed, float radius, float deltaTime, int count, {Vector3 position, Vector3 velocity, float radius}[count]` | `int ok, Vector3 velocity, Vector3 position` |
 | `13` REPORT_STUCK | `int mapId, Vector3 position, float radius` (`<= 0` = default) | `bool` |
 | `14` PATH_EX | same as PATH | `int count, int resultFlags (1 = partial), Vector3 points[count], uint8 pointFlags[count]` (count 0 on failure) |
+| `15` LINE_OF_SIGHT | `int mapId, int ignore, Vector3 start, Vector3 end` | `int result (1 hit, 0 clear, -1 no static world), float t, Vector3 position, Vector3 normal, uint32 source, int area` |
+| `16` SURFACES | `int mapId, int ignore, float x, float y, float zTop, float zBottom` | `int count (-1 no static world), uint32 areaId, {float z, Vector3 normal, uint32 source, uint8 area, uint8 flags, uint16}[count]` |
+| `17` SWEEP | `int mapId, int ignore, Vector3 start, Vector3 end, float radius, float height, float stepHeight` | same as LINE_OF_SIGHT, `position` = where the body stops |
 
 Path flags: `1` Chaikin, `2` Catmull-Rom, `4` Bezier (one smoothing), `8` validate with closest point on poly,
 `16` validate with move along surface, `32` require a complete path (fail if the end is unreachable instead of
@@ -275,6 +286,18 @@ same between requests and a request is cheap. Anything else searches again.
 
 **PATH_EX point flags**: `1` start, `2` end, `4` an off-mesh connection starts here (the next point is where it ends),
 then how to take it: `8` jump, `16` drop (walk off the ledge), `32` custom link.
+
+**Static world** (protocol 4): `{mapId:03}.anw` files written by the exporter next to the `.anp` (`sWorldPath`
+to keep them elsewhere, `--no-world` to skip them). Tiles are read when a query needs them and kept per map
+(`iWorldCacheTiles`, an ADT of terrain takes ~2.7 MB in memory with its bounding volume hierarchy, buildings add to
+it). `source` is `kind << 28 | id`: kind `0` terrain, `1`
+WMO (placement unique id), `2` doodad (M2 placed by the map, unique id), `3` liquid, `4` game object added at export
+(display id). `ignore` flags: `1` terrain, `2` WMOs, `4` doodads, `8` liquids, `16` game objects; liquids never block
+LINE_OF_SIGHT. SURFACES flags: `1` standable (walkable, not too steep), `2` liquid, at most 64 surfaces highest first,
+`areaId` is the AreaTable id of the chunk (zone/subzone). SWEEP approximates the body with rays at three heights
+(above `stepHeight`, middle, head) along the center and both sides, its front included: it catches what the navmesh
+rounds away (posts, branches at head height) but not a thin horizontal deck between the rays. Segments are limited
+to 1000 yards.
 
 **Off-mesh connections.** Area ids `40` jump, `41` drop, `42` link, polygon flags `64` jump, `128` drop, the same for
 ANP and MMAP navmeshes. Jumps are excluded by the default filters (a bot has to jump there): enable them with a
@@ -325,6 +348,9 @@ SteerResult step = nav.Steer(0, position, velocity, nextWaypoint, maxSpeed: 7f, 
 nav.ReportStuck(0, position);                  // every client avoids this spot from now on
 
 RaycastHit hit = nav.CastRayEx(0, position, target);
+WorldHit view = nav.LineOfSight(0, eyes, targetEyes, WorldIgnore.Doodads); // view.Source: Wmo 1234, Terrain...
+WorldSurfaces? floors = nav.GetSurfaces(0, x, y, z + 50f, z - 50f);       // decks, bridges, water, AreaId
+WorldHit bump = nav.Sweep(0, position, nextWaypoint, radius: 0.5f, height: 2f);
 Vector3[]? route = nav.ExplorePolygon(0, position, grindArea, spacing: 40f);
 ServerConfig? config = nav.GetConfig(); // ProtocolVersion, MaxPointPath, ServerVersion, ...
 ```

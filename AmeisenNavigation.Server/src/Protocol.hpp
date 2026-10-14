@@ -26,6 +26,9 @@
 ///   REPORT_STUCK            -> bool, request: ReportStuckData
 ///   PATH_EX                 -> PathExResponseHeader + pointCount Vector3 + pointCount uint8 PathPointFlags
 ///                              (pointCount 0 on failure), request: like PATH (RANDOMIZE flag for random offsets)
+///   LINE_OF_SIGHT           -> WorldHitResponse, request: LineOfSightData
+///   SURFACES                -> SurfacesResponseHeader + count SurfaceData, request: SurfacesRequestData
+///   SWEEP                   -> WorldHitResponse, request: SweepData
 ///   unknown types           -> empty payload
 
 enum class MessageType : unsigned char
@@ -45,6 +48,9 @@ enum class MessageType : unsigned char
     STEER,               // Local steering: velocity for one tick avoiding units, zones and walls
     REPORT_STUCK,        // Report a position where the client got stuck (a zone every client avoids)
     PATH_EX,             // Path with a flag per point (start/end, where to jump or drop, partial result)
+    LINE_OF_SIGHT,       // Line of sight against the collision geometry (static world)
+    SURFACES,            // Every surface under a point with its provenance (static world)
+    SWEEP,               // Move a standing body along a segment: what it runs into (static world)
 };
 
 enum class PathType
@@ -74,7 +80,8 @@ enum class PathRequestFlags : int
 ///   2: EXPLORE_POLY, PathRequestFlags::REQUIRE_COMPLETE, GET_CONFIG trailer
 ///   3: AVOID_WALLS, SHORTCUT, ROUND_CORNERS, FOLLOW, PathTuningData trailer, SET_AVOID_ZONES, STEER,
 ///      REPORT_STUCK, PATH_EX, CONFIGURE_FILTER cost 0 (forbid) / > 0 (allow areas excluded by default)
-constexpr int PROTOCOL_VERSION = 3;
+///   4: LINE_OF_SIGHT, SURFACES, SWEEP (static world)
+constexpr int PROTOCOL_VERSION = 4;
 
 constexpr bool HasFlag(int flags, PathRequestFlags flag) noexcept { return (flags & static_cast<int>(flag)) != 0; }
 
@@ -216,6 +223,72 @@ struct ReportStuckData
     float radius;     // <= 0: server default (fStuckZoneRadius)
 };
 
+/// Static world queries. flags: World::QueryFlags, kinds of geometry ignored (1 terrain, 2 WMOs, 4 doodads,
+/// 8 liquids, 16 game objects).
+struct LineOfSightData
+{
+    int mapId;
+    int flags;
+    Vector3 start;
+    Vector3 end;
+};
+
+struct SweepData
+{
+    int mapId;
+    int flags;
+    Vector3 start; // feet positions
+    Vector3 end;
+    float radius;
+    float height;
+    float stepHeight; // geometry below this height above the feet is walked over
+};
+
+struct WorldHitResponse
+{
+    int result;       // 1 = hit, 0 = clear, -1 = no static world there / invalid request
+    float t;          // fraction of start -> end before the hit (1 if clear)
+    Vector3 position; // hit position (LINE_OF_SIGHT) or where the body stops (SWEEP), end if clear
+    Vector3 normal;   // surface normal facing the ray (zero if clear)
+    unsigned int source; // kind << 28 | id: 0 terrain, 1 WMO, 2 doodad (M2), 3 liquid, 4 game object (display id)
+    int area;            // navmesh area id of the triangle (0 = too steep to stand on)
+};
+
+struct SurfacesRequestData
+{
+    int mapId;
+    int flags;
+    float x;
+    float y;
+    float zTop;
+    float zBottom;
+};
+
+struct SurfacesResponseHeader
+{
+    int count;           // surfaces following, -1 = no static world there / invalid request
+    unsigned int areaId; // AreaTable id of the chunk (0 = unknown)
+};
+
+enum SurfaceFlags : unsigned char
+{
+    SURFACE_STANDABLE = 1 << 0, // walkable ground (not too steep, not liquid)
+    SURFACE_LIQUID = 1 << 1,
+};
+
+struct SurfaceData
+{
+    float z;
+    Vector3 normal;
+    unsigned int source;
+    unsigned char area;
+    unsigned char flags; // SurfaceFlags
+    unsigned short reserved;
+};
+
+/// Most surfaces in one SURFACES response.
+constexpr int MAX_SURFACES = 64;
+
 struct FilterConfig
 {
     unsigned char areaId;
@@ -246,6 +319,10 @@ static_assert(sizeof(SteerRequestHeader) == 56 && offsetof(SteerRequestHeader, u
 static_assert(sizeof(SteerUnitData) == 28 && sizeof(SteerResponse) == 28);
 static_assert(sizeof(ReportStuckData) == 20);
 static_assert(sizeof(PathExResponseHeader) == 8);
+static_assert(sizeof(LineOfSightData) == 32 && sizeof(SweepData) == 44);
+static_assert(sizeof(WorldHitResponse) == 40 && offsetof(WorldHitResponse, source) == 32);
+static_assert(sizeof(SurfacesRequestData) == 24 && sizeof(SurfacesResponseHeader) == 8);
+static_assert(sizeof(SurfaceData) == 24 && offsetof(SurfaceData, area) == 20);
 static_assert(sizeof(ConfigureFilterHeader) == 8 && offsetof(ConfigureFilterHeader, filterConfigCount) == 4);
 
 /// Maximum number of filter entries in one CONFIGURE_FILTER request (one per Detour area).

@@ -333,7 +333,7 @@ TEST_CASE(OffMesh_LinkAcrossTilesIsConnectedOnBothEnds)
 }
 
 namespace {
-AmeisenNavigationSettings AnpWorld()
+AmeisenNavigationSettings AnpWorldSettings()
 {
     AmeisenNavigationSettings settings;
     settings.meshFolder = TestWorld::Get().meshDir;
@@ -362,7 +362,7 @@ TEST_CASE(OffMesh_AutoDropLinksLeadOffThePlatform)
     const Vector3 ground = Wow(-600.0f, 0.0f, -425.0f);
 
     {
-        AmeisenNavigation nav(AnpWorld());
+        AmeisenNavigation nav(AnpWorldSettings());
         REQUIRE(nav.NewClient(1));
         Path path(256);
         bool partial = false;
@@ -370,7 +370,7 @@ TEST_CASE(OffMesh_AutoDropLinksLeadOffThePlatform)
         CHECK(partial);
     }
 
-    AmeisenNavigationSettings settings = AnpWorld();
+    AmeisenNavigationSettings settings = AnpWorldSettings();
     settings.autoDropHeight = 8.0f;
     AmeisenNavigation nav(settings);
     REQUIRE(nav.NewClient(1));
@@ -418,7 +418,7 @@ TEST_CASE(OffMesh_FileLinksAndJumpsAreReported)
         out << "1 1,1 (nan 0 0) (1 1 1) 1.0\n";          // invalid
     }
 
-    AmeisenNavigationSettings settings = AnpWorld();
+    AmeisenNavigationSettings settings = AnpWorldSettings();
     settings.offMeshFile = file;
     AmeisenNavigation nav(settings);
     REQUIRE(nav.NewClient(1));

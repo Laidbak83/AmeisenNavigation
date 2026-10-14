@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased (protocol 4)
+
+### Static world
+
+- **`.anw` files** next to the `.anp` (exporter, `--no-world` to skip): the collision geometry the navmesh was built
+  from with the provenance of every triangle: terrain, WMO (placement unique id), M2 doodad (unique id), liquid, game
+  object (display id), the navmesh area (0 = too steep to stand on) and the AreaTable id of every chunk. MPQ and
+  `--tc-data` exports. About 350 KB per ADT of terrain plus the models.
+- **Server queries** (tiles read on demand, `iWorldCacheTiles` per map, bounding volume hierarchy per tile):
+  - `15` LINE_OF_SIGHT against the geometry, with what blocks it (doodads, game objects, WMOs or terrain can be
+    ignored; liquids never block)
+  - `16` SURFACES: every surface under a point, highest first (decks, bridges, floors, water, the ground) with source,
+    normal, standable/liquid flags and the zone's AreaTable id
+  - `17` SWEEP: a standing body (radius, height) moved along a segment, the first geometry it runs into above step
+    height (rays at three heights on the center and both sides)
+- C# client: `LineOfSight`, `GetSurfaces`, `Sweep` (`WorldHit`, `WorldSurface(s)`, `WorldSource`, `WorldIgnore`).
+- Config: `sWorldPath`, `iWorldCacheTiles`.
+
 ## 1.11.0.0
 
 Navmeshes for recent clients and obstacles that block. The ANP format, area ids and the protocol (3) are unchanged:

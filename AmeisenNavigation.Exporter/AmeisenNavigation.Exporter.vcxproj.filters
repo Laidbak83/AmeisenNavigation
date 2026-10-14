@@ -123,6 +123,7 @@
     <ClInclude Include="src\Wow\GameObjects.hpp" />
     <ClInclude Include="src/Wow/TcData.hpp" />
     <ClInclude Include="src/Dbc/Db2Header.hpp" />
+    <ClInclude Include="src/Processors/WorldBuilder.hpp" />
   </ItemGroup>
   <ItemGroup>
     <None Include="src\Utils\xxhash\LICENSE" />

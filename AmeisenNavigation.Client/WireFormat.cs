@@ -138,6 +138,67 @@ namespace AmeisenNavigation.Client
         public float Radius;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct LineOfSightData
+    {
+        public int MapId;
+        public int Flags;
+        public Vector3 Start;
+        public Vector3 End;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct SweepData
+    {
+        public int MapId;
+        public int Flags;
+        public Vector3 Start;
+        public Vector3 End;
+        public float Radius;
+        public float Height;
+        public float StepHeight;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct WorldHitResponse
+    {
+        public int Result;
+        public float T;
+        public Vector3 Position;
+        public Vector3 Normal;
+        public uint Source;
+        public int Area;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct SurfacesRequestData
+    {
+        public int MapId;
+        public int Flags;
+        public float X;
+        public float Y;
+        public float ZTop;
+        public float ZBottom;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct SurfacesResponseHeader
+    {
+        public int Count;
+        public uint AreaId;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct SurfaceData
+    {
+        public float Z;
+        public Vector3 Normal;
+        public uint Source;
+        public byte Area;
+        public byte Flags;
+        public ushort Reserved;
+    }
+
     /// <summary>Wire struct sizes, compared with the server's by the integration test.</summary>
     internal static class WireSizes
     {
@@ -152,6 +213,12 @@ namespace AmeisenNavigation.Client
             (nameof(SteerUnitData), Marshal.SizeOf<SteerUnitData>(), 28),
             (nameof(SteerResponse), Marshal.SizeOf<SteerResponse>(), 28),
             (nameof(ReportStuckData), Marshal.SizeOf<ReportStuckData>(), 20),
+            (nameof(LineOfSightData), Marshal.SizeOf<LineOfSightData>(), 32),
+            (nameof(SweepData), Marshal.SizeOf<SweepData>(), 44),
+            (nameof(WorldHitResponse), Marshal.SizeOf<WorldHitResponse>(), 40),
+            (nameof(SurfacesRequestData), Marshal.SizeOf<SurfacesRequestData>(), 24),
+            (nameof(SurfacesResponseHeader), Marshal.SizeOf<SurfacesResponseHeader>(), 8),
+            (nameof(SurfaceData), Marshal.SizeOf<SurfaceData>(), 24),
         ];
     }
 }

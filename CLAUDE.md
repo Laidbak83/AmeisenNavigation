@@ -71,6 +71,12 @@ exclusion (cost 0), allowed areas (cost > 0 bypasses the flag exclusion), avoid 
 sources run a post-load hook: `sOffMeshFile`, automatic drops). Off-mesh area ids 40/41/42 and flags
 `NAV_JUMP`/`NAV_DROP` (`AnpFormat.hpp`) are shared by ANP and MMAP navmeshes; jumps are excluded by default.
 
+**Static world.** The exporter also writes `{mapId:03}.anw` (`AnpWorld.hpp`, `Processors/WorldBuilder.hpp`): the
+triangles the navmesh was built from, per ADT, quantized, with a nav area and a source (`SourceKind << 28 | id`, from
+`Structure::triSources`; tag new geometry with `TagSources` right after adding it) and per chunk AreaTable ids. The
+server reads tiles on demand (`World/StaticWorld.cpp`: LRU per map, BVH per tile) for LINE_OF_SIGHT, SURFACES and
+SWEEP; positions go through `AnpWorld::AdtOf`/`IsFinite` checks, segments are capped at 1000 yards.
+
 **Nav sources.** `AnpNavSource` (own format: zip with `mapId`, `params` and one Detour tile per `XX_YY` entry) and
 `MmapNavSource` (TrinityCore/SkyFire `.mmap`/`.mmtile`, format detected from file names, TrinityCore master's MMAP v16
 from the magic in front of the `.mmap`; child maps can fall back to their parent's files). Maps load lazily once

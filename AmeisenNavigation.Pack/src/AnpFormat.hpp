@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 /// Area IDs for ANP navmesh polygons (and compact heightfield spans during export).
 ///
 /// The IDs come in triplets {neutral, Alliance, Horde} per surface category, so
@@ -165,3 +167,24 @@ static_assert(GetNeutralArea(HORDE_LIQUID_SLIME) == LIQUID_SLIME);
 static_assert(WithFaction(TERRAIN_CITY, AreaFaction::Alliance) == ALLIANCE_TERRAIN_CITY);
 static_assert(AreaToPolyFlags(ALLIANCE_TERRAIN_ROAD) == (NAV_GROUND | NAV_ROAD | NAV_ALLIANCE));
 static_assert(AreaToPolyFlags(HORDE_LIQUID_LAVA) == (NAV_LAVA_SLIME | NAV_HORDE));
+
+/// Provenance of static world triangles (.anw files, AnpWorld.hpp): SourceKind << 28 | id.
+namespace AnpWorld {
+enum class SourceKind : uint8_t
+{
+    TERRAIN = 0,
+    WMO = 1,         // id = placement unique id
+    DOODAD = 2,      // M2 placed by the map, id = placement unique id (WMO doodads: the WMO's)
+    LIQUID = 3,      // terrain liquid surfaces
+    GAME_OBJECT = 4, // id = display id
+    OTHER = 15,
+};
+
+constexpr uint32_t MakeSource(SourceKind kind, uint32_t id) noexcept
+{
+    return (static_cast<uint32_t>(kind) << 28) | (id & 0x0FFFFFFFu);
+}
+
+constexpr SourceKind KindOf(uint32_t source) noexcept { return static_cast<SourceKind>(source >> 28); }
+constexpr uint32_t IdOf(uint32_t source) noexcept { return source & 0x0FFFFFFFu; }
+} // namespace AnpWorld

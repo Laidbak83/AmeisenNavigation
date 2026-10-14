@@ -53,6 +53,9 @@ const char* MessageName(AnTcpMessageType type) noexcept
         case MessageType::STEER: return "Steer";
         case MessageType::REPORT_STUCK: return "ReportStuck";
         case MessageType::PATH_EX: return "PathEx";
+        case MessageType::LINE_OF_SIGHT: return "LineOfSight";
+        case MessageType::SURFACES: return "Surfaces";
+        case MessageType::SWEEP: return "Sweep";
         default: return "Unknown";
     }
 }
@@ -85,6 +88,8 @@ NavServer::NavServer(const AmeisenNavConfig& config) : Cfg(config)
     settings.offMeshFile = Cfg.offMeshFile;
     settings.autoDropHeight = Cfg.autoDropHeight;
     settings.autoDropReach = Cfg.autoDropReach;
+    settings.worldFolder = Cfg.worldPath;
+    settings.worldCacheTiles = static_cast<size_t>(std::max(1, Cfg.worldCacheTiles));
 
     Navigation = std::make_unique<AmeisenNavigation>(settings);
     TcpServer = std::make_unique<AnTcpServer>(Cfg.ip, static_cast<unsigned short>(Cfg.port));
@@ -139,6 +144,11 @@ void NavServer::ValidateConfig(AmeisenNavConfig& config, std::vector<std::string
     if (config.statsIntervalSec < 0)
     {
         errors.push_back("iStatsIntervalSec has to be >= 0 (0 = off)");
+    }
+
+    if (config.worldCacheTiles < 1 || config.worldCacheTiles > 4096)
+    {
+        errors.push_back("iWorldCacheTiles has to be between 1 and 4096");
     }
 
     if (config.clientIdleTimeoutSec < 0)
@@ -349,6 +359,9 @@ void NavServer::RegisterCallbacks()
     add(MessageType::STEER, std::bind_front(&NavServer::HandleSteer, this));
     add(MessageType::REPORT_STUCK, std::bind_front(&NavServer::HandleReportStuck, this));
     add(MessageType::PATH_EX, std::bind_front(&NavServer::HandlePathEx, this));
+    add(MessageType::LINE_OF_SIGHT, std::bind_front(&NavServer::HandleLineOfSight, this));
+    add(MessageType::SURFACES, std::bind_front(&NavServer::HandleSurfaces, this));
+    add(MessageType::SWEEP, std::bind_front(&NavServer::HandleSweep, this));
 }
 
 AnTcpError NavServer::Run() noexcept
@@ -1052,4 +1065,100 @@ void NavServer::HandlePathEx(ClientHandler* handler, AnTcpMessageType type, cons
     std::memcpy(buffer.data() + sizeof(header) + static_cast<size_t>(result->pointCount) * sizeof(Vector3),
                 flags.data(), static_cast<size_t>(result->pointCount));
     handler->SendData(type, buffer.data(), buffer.size());
+}
+
+namespace {
+WorldHitResponse ToResponse(bool known, const World::Hit& hit)
+{
+    WorldHitResponse response{-1, 0.0f, Vector3{}, Vector3{}, 0u, 0};
+
+    if (known)
+    {
+        response.result = hit.hit ? 1 : 0;
+        response.t = hit.t;
+        response.position = hit.position;
+        response.normal = hit.normal;
+        response.source = hit.source;
+        response.area = hit.area;
+    }
+
+    return response;
+}
+} // namespace
+
+void NavServer::HandleLineOfSight(ClientHandler* handler, AnTcpMessageType type, const void* data, int size)
+{
+    LineOfSightData request{};
+    World::Hit hit;
+    bool known = false;
+
+    if (ReadRequest(data, size, request))
+    {
+        known = Navigation->LineOfSight(request.mapId, request.start, request.end,
+                                        static_cast<uint32_t>(request.flags), hit);
+    }
+    else
+    {
+        LogTooSmall(handler, type, size, sizeof(request));
+    }
+
+    const WorldHitResponse response = ToResponse(known, hit);
+    handler->SendDataPtr(type, &response);
+}
+
+void NavServer::HandleSweep(ClientHandler* handler, AnTcpMessageType type, const void* data, int size)
+{
+    SweepData request{};
+    World::Hit hit;
+    bool known = false;
+
+    if (ReadRequest(data, size, request))
+    {
+        known = Navigation->SweepBody(request.mapId, request.start, request.end, request.radius, request.height,
+                                      request.stepHeight, static_cast<uint32_t>(request.flags), hit);
+    }
+    else
+    {
+        LogTooSmall(handler, type, size, sizeof(request));
+    }
+
+    const WorldHitResponse response = ToResponse(known, hit);
+    handler->SendDataPtr(type, &response);
+}
+
+void NavServer::HandleSurfaces(ClientHandler* handler, AnTcpMessageType type, const void* data, int size)
+{
+    SurfacesRequestData request{};
+    std::vector<World::Surface> surfaces;
+    uint32_t areaId = 0;
+    SurfacesResponseHeader header{-1, 0u};
+
+    if (!ReadRequest(data, size, request))
+    {
+        LogTooSmall(handler, type, size, sizeof(request));
+    }
+    else if (Navigation->GetSurfaces(request.mapId, request.x, request.y, request.zTop, request.zBottom,
+                                     static_cast<uint32_t>(request.flags), surfaces, areaId))
+    {
+        header.count = static_cast<int>(std::min<size_t>(surfaces.size(), MAX_SURFACES));
+        header.areaId = areaId;
+    }
+
+    std::vector<unsigned char> response(sizeof(header) + std::max(header.count, 0) * sizeof(SurfaceData));
+    std::memcpy(response.data(), &header, sizeof(header));
+
+    for (int i = 0; i < header.count; ++i)
+    {
+        const World::Surface& surface = surfaces[static_cast<size_t>(i)];
+        SurfaceData out{};
+        out.z = surface.z;
+        out.normal = surface.normal;
+        out.source = surface.source;
+        out.area = surface.area;
+        out.flags = static_cast<unsigned char>((surface.standable ? SURFACE_STANDABLE : 0)
+                                               | (surface.liquid ? SURFACE_LIQUID : 0));
+        std::memcpy(response.data() + sizeof(header) + i * sizeof(SurfaceData), &out, sizeof(out));
+    }
+
+    handler->SendData(type, response.data(), response.size());
 }

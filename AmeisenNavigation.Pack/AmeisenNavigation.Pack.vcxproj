@@ -153,6 +153,7 @@
     <ClInclude Include="src\Version.hpp" />
     <ClInclude Include="src\miniz\miniz.h" />
     <ClInclude Include="src/NavMeshPly.hpp" />
+    <ClInclude Include="src/AnpWorld.hpp" />
   </ItemGroup>
   <ItemGroup>
     <None Include="src\miniz\LICENSE" />

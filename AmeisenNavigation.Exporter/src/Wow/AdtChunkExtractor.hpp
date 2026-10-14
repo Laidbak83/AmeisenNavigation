@@ -618,7 +618,9 @@ inline bool ExtractGlobalWmo(const Wdt* wdt, CachedFileReader& reader, Structure
     entry.x += WORLDSIZE;
     entry.z += WORLDSIZE;
 
+    const size_t first = structure->tris.size();
     ExtractWmoPlacement(entry, wdt->GlobalWmoName(), reader, structure, liquidTypes);
+    structure->TagSources(first, AnpWorld::MakeSource(AnpWorld::SourceKind::WMO, entry.uniqueId));
     return true;
 }
 
@@ -645,7 +647,9 @@ inline void ExtractWmoGeometry(Adt* adt, CachedFileReader& reader, Structure* st
 
         if (const char* wmoRootFilename = adt->GetFilename(adt->Mwmo(), adt->Mwid(), entry.id))
         {
+            const size_t first = structure->tris.size();
             ExtractWmoPlacement(entry, wmoRootFilename, reader, structure, liquidTypes);
+            structure->TagSources(first, AnpWorld::MakeSource(AnpWorld::SourceKind::WMO, entry.uniqueId));
         }
     }
 }
@@ -744,6 +748,8 @@ inline void ExtractDoodadGeometry(Adt* adt, CachedFileReader& reader, Structure*
             transform.SetTranslation({-(entry.z - WORLDSIZE), -(entry.x - WORLDSIZE), entry.y});
         }
 
+        const size_t first = structure->tris.size();
         AddM2Collision(m2, transform, structure, DOODAD);
+        structure->TagSources(first, AnpWorld::MakeSource(AnpWorld::SourceKind::DOODAD, entry.uniqueId));
     }
 }

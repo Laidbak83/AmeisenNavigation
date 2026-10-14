@@ -4,6 +4,7 @@
 #include <mutex>
 
 #include "Processors/AdtTileProcessor.hpp"
+#include "Processors/WorldBuilder.hpp"
 #include "Utils/Structure.hpp"
 
 /// Synthetic two-ADT world exported through the real exporter pipeline (AdtTileProcessor + AnpWriter).
@@ -16,12 +17,20 @@
 ///   - a water pool (surface y = 0.5) over x [-120, -60], z [-460, -400]
 ///   - a road over x [-200, -150], z [-300, -250]
 ///   - an Alliance faction chunk over x [-100, -40], z [-100, -40]
+///   - a 1 x 1 yard, 6 yard high pillar (a doodad) over x [-900, -899], z [-450, -449]
+/// The static world (001.anw) has the walls as WMO 77, the platform as WMO 78, the pillar as doodad 99, the chunk
+/// area 12 everywhere except area 1519 in the chunk at RD x [-33.3, 0], z [-33.3, 0].
 namespace TestWorld {
 constexpr int MAP_ID = 1;
 constexpr float WALL_X = -300.0f;
 constexpr float WALL_Z_MIN = -520.0f;
 constexpr float WALL_Z_MAX = -100.0f;
 constexpr float PLATFORM_Y = 5.0f;
+constexpr float PILLAR_X = -900.0f;
+constexpr float PILLAR_Z = -450.0f;
+constexpr uint32_t WALL_SOURCE = (1u << 28) | 77; // AnpWorld::MakeSource(WMO, 77)
+constexpr uint32_t PLATFORM_SOURCE = (1u << 28) | 78;
+constexpr uint32_t PILLAR_SOURCE = (2u << 28) | 99; // doodad
 
 /// RD -> WoW
 inline Vector3 Wow(float rdX, float rdY, float rdZ) { return Vector3(rdZ, rdX, rdY); }
@@ -85,10 +94,19 @@ inline const Result& Get()
 
         Structure geometry;
         AddQuad(geometry, -2 * TILESIZE, -TILESIZE, 0.0f, 0.0f, 0.0f, TERRAIN_GROUND);
+        size_t first = geometry.tris.size();
         AddWallX(geometry, WALL_X, WALL_Z_MIN, WALL_Z_MAX, -1.0f, 10.0f);
         AddWallX(geometry, WALL_X + 1.0f, WALL_Z_MIN, WALL_Z_MAX, -1.0f, 10.0f);
+        geometry.TagSources(first, WALL_SOURCE);
+        first = geometry.tris.size();
         AddQuad(geometry, -450.0f, -450.0f, -400.0f, -400.0f, PLATFORM_Y, WMO);
+        geometry.TagSources(first, PLATFORM_SOURCE);
         AddQuad(geometry, -120.0f, -460.0f, -60.0f, -400.0f, 0.5f, LIQUID_WATER);
+        first = geometry.tris.size();
+        AddWallX(geometry, PILLAR_X, PILLAR_Z, PILLAR_Z + 1.0f, -0.5f, 6.0f);
+        AddWallX(geometry, PILLAR_X + 1.0f, PILLAR_Z, PILLAR_Z + 1.0f, -0.5f, 6.0f);
+        AddQuad(geometry, PILLAR_X, PILLAR_Z, PILLAR_X + 1.0f, PILLAR_Z + 1.0f, 6.0f, DOODAD);
+        geometry.TagSources(first, PILLAR_SOURCE);
 
         WaterMap water;
         RoadMap roads;
@@ -123,6 +141,19 @@ inline const Result& Get()
         result.tilesBuilt = processor.GetStats().built.load();
         result.tilesFailed = processor.GetStats().failed.load();
         writer.Save(result.meshDir);
+
+        ChunkAreaMap chunkAreas;
+
+        for (int r = 0; r < 16; ++r)
+        {
+            for (int c = 0; c < 16; ++c)
+            {
+                chunkAreas.Set(32, 32, r, c, r == 0 && c == 0 ? 1519 : 12);
+                chunkAreas.Set(33, 32, r, c, 12);
+            }
+        }
+
+        WriteWorld(geometry, {{32, 32}, {33, 32}}, chunkAreas, MAP_ID, result.meshDir);
     });
 
     return result;

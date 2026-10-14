@@ -152,5 +152,29 @@ var steer = nav.Steer(map, Wow(-600, 0, -100), Wow(7, 0, 0), Wow(-500, 0, -100),
 Check(steer.IsValid && Math.Abs(steer.Velocity.X) > 1f, $"Steer sidesteps {steer}");
 Check(nav.ReportStuck(map, Wow(-650, 0, -150), 5f), "ReportStuck");
 
+// Static world (protocol 4): walls are WMO 77, the deck WMO 78, the pillar doodad 99.
+Check(cfg!.ProtocolVersion >= 4, "protocol 4");
+var los = nav.LineOfSight(map, Wow(-350, 1.7f, -300), Wow(-250, 1.7f, -300));
+Check(los is { Known: true, Hit: true } && los.Source.Kind == WorldSourceKind.Wmo && los.Source.Id == 77,
+      $"LineOfSight through the wall {los}");
+Check(nav.LineOfSight(map, Wow(-350, 12, -300), Wow(-250, 12, -300)) is { Known: true, Hit: false },
+      "LineOfSight over the wall");
+var pillar = nav.LineOfSight(map, Wow(-920, 2, -449.5f), Wow(-880, 2, -449.5f));
+Check(pillar.Hit && pillar.Source.Kind == WorldSourceKind.Doodad && pillar.Source.Id == 99, $"pillar {pillar}");
+Check(!nav.LineOfSight(map, Wow(-920, 2, -449.5f), Wow(-880, 2, -449.5f), WorldIgnore.Doodads).Hit,
+      "LineOfSight ignoring doodads");
+Check(!nav.LineOfSight(4242, Wow(0, 1, 0), Wow(5, 1, 5)).Known, "LineOfSight without a static world");
+var sweep = nav.Sweep(map, Wow(-320, 0, -300), Wow(-280, 0, -300), 0.5f, 2f, 0.5f);
+Check(sweep.Hit && Math.Abs(sweep.Position.Y - (-300.5f)) < 0.1f, $"Sweep into the wall {sweep}");
+var deckPoint = Wow(-425, 0, -425);
+var surfaces = nav.GetSurfaces(map, deckPoint.X, deckPoint.Y, 50, -50);
+Check(surfaces is { Surfaces.Count: 2, AreaId: 12 } && Math.Abs(surfaces.Surfaces[0].Z - 5) < 0.01f
+          && surfaces.Surfaces[0].Source.Id == 78 && surfaces.Surfaces[0].Standable
+          && surfaces.Surfaces[1].Source.Kind == WorldSourceKind.Terrain,
+      $"GetSurfaces under the deck {surfaces?.Surfaces.Count}");
+var pool = Wow(-90, 0, -430);
+Check(nav.GetSurfaces(map, pool.X, pool.Y, 10, -10) is { Surfaces: [{ Liquid: true }, { Standable: true }] },
+      "GetSurfaces pool");
+
 Console.WriteLine(failures == 0 ? "ALL OK" : $"{failures} FAILED");
 return failures == 0 ? 0 : 1;

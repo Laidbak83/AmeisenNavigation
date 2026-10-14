@@ -39,7 +39,9 @@ static dtStatus SafeFindStraightPath(const dtNavMeshQuery* query, const float* s
 }
 #endif
 
-AmeisenNavigation::AmeisenNavigation(const AmeisenNavigationSettings& settings) : Settings(settings)
+AmeisenNavigation::AmeisenNavigation(const AmeisenNavigationSettings& settings)
+    : Settings(settings),
+      Worlds(settings.worldFolder.empty() ? settings.meshFolder : settings.worldFolder, settings.worldCacheTiles)
 {
     Settings.maxPolyPath = std::max(Settings.maxPolyPath, 1);
     Settings.maxPointPath = std::max(Settings.maxPointPath, 2);
@@ -1173,4 +1175,25 @@ bool AmeisenNavigation::CalculateNormalPath(dtNavMeshQuery* query, const dtQuery
     }
 
     return true;
+}
+
+bool AmeisenNavigation::LineOfSight(int mapId, const Vector3& start, const Vector3& end, uint32_t ignore,
+                                    World::Hit& hit)
+{
+    World::StaticWorld* world = Worlds.Get(mapId);
+    return world && world->Raycast(start, end, ignore | World::IGNORE_LIQUIDS, hit);
+}
+
+bool AmeisenNavigation::GetSurfaces(int mapId, float x, float y, float zTop, float zBottom, uint32_t ignore,
+                                    std::vector<World::Surface>& surfaces, uint32_t& areaId)
+{
+    World::StaticWorld* world = Worlds.Get(mapId);
+    return world && world->Surfaces(x, y, zTop, zBottom, ignore, surfaces, areaId);
+}
+
+bool AmeisenNavigation::SweepBody(int mapId, const Vector3& start, const Vector3& end, float radius, float height,
+                                  float stepHeight, uint32_t ignore, World::Hit& hit)
+{
+    World::StaticWorld* world = Worlds.Get(mapId);
+    return world && world->Sweep(start, end, radius, height, stepHeight, ignore, hit);
 }

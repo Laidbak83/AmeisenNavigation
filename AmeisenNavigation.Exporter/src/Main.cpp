@@ -33,6 +33,7 @@ void PrintUsage()
         "  -j, --threads <n>       Number of worker threads (default: all cores)\n"
         "  -s, --skip-existing     Don't rebuild maps whose .anp file already exists\n"
         "  -d, --debug             Debug logging and area debug images (<output>/debug)\n"
+        "      --no-world          Don't write the static world (.anw, collision geometry for line of sight etc.)\n"
         "  -l, --list-maps         List the maps (Map.dbc, or the files in --tc-data) and exit\n"
         "  -g, --gameobjects <file> Add the collision of these game object spawns (see README)\n"
         "      --gameobject-exclude <types|none> Game object types left out [0,11,15,33,35: doors,\n"
@@ -93,6 +94,10 @@ bool ParseArguments(int argc, char** argv, CommandLine& cmd, bool& exitEarly)
         else if (arg == "--list-maps" || arg == "-l")
         {
             cmd.listMaps = true;
+        }
+        else if (arg == "--no-world")
+        {
+            options.writeWorld = false;
         }
         else if (arg == "--skip-existing" || arg == "-s")
         {

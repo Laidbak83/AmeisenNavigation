@@ -925,8 +925,10 @@ TEST_CASE(Server_StatsSummary)
     CHECK(summary.find("GetHeight 1 avg") != std::string::npos);
     CHECK(summary.find("1 clients") != std::string::npos);
 
-    // Counters were reset.
-    CHECK(server.Get().TakeStatsSummary(1.0).empty());
+    // Counters were reset. The last RANDOM_POINT may only be recorded after its answer arrived (it is recorded once
+    // the handler returns), everything before it is in the first summary.
+    const std::string rest = server.Get().TakeStatsSummary(1.0);
+    CHECK(rest.find("Path") == std::string::npos && rest.find("GetHeight") == std::string::npos);
 }
 
 TEST_CASE(Server_StopBeforeRunIsNotLost)
@@ -982,3 +984,63 @@ TEST_CASE(AnTcp_FailedSendDropsTheClient)
     CHECK(!server.Dispatch(&client, &unknown, 1));
 }
 #endif
+
+TEST_CASE(Server_StaticWorldQueries)
+{
+    ServerFixture server;
+    RawClient client(server.Port());
+    REQUIRE(client.Connected());
+
+    // Line of sight through the wall (WMO 77), over it, a map without a static world.
+    LineOfSightData los{TestWorld::MAP_ID, 0, Wow(-350.0f, 1.7f, -300.0f), Wow(-250.0f, 1.7f, -300.0f)};
+    auto response = client.Request(MessageType::LINE_OF_SIGHT, los);
+    REQUIRE(response && response->size() == sizeof(WorldHitResponse));
+    WorldHitResponse hit{};
+    std::memcpy(&hit, response->data(), sizeof(hit));
+    CHECK_EQ(hit.result, 1);
+    CHECK_EQ(hit.source, TestWorld::WALL_SOURCE);
+    CHECK_NEAR(hit.position.y, TestWorld::WALL_X, 0.05);
+
+    los.start.z = los.end.z = 12.0f;
+    response = client.Request(MessageType::LINE_OF_SIGHT, los);
+    REQUIRE(response && response->size() == sizeof(WorldHitResponse));
+    std::memcpy(&hit, response->data(), sizeof(hit));
+    CHECK_EQ(hit.result, 0);
+
+    los.mapId = 4242;
+    response = client.Request(MessageType::LINE_OF_SIGHT, los);
+    REQUIRE(response && response->size() == sizeof(WorldHitResponse));
+    std::memcpy(&hit, response->data(), sizeof(hit));
+    CHECK_EQ(hit.result, -1);
+
+    // Sweep into the wall.
+    const SweepData sweep{TestWorld::MAP_ID, 0, Wow(-320.0f, 0.0f, -300.0f), Wow(-280.0f, 0.0f, -300.0f), 0.5f, 2.0f,
+                          0.5f};
+    response = client.Request(MessageType::SWEEP, sweep);
+    REQUIRE(response && response->size() == sizeof(WorldHitResponse));
+    std::memcpy(&hit, response->data(), sizeof(hit));
+    CHECK_EQ(hit.result, 1);
+    CHECK_NEAR(hit.position.y, TestWorld::WALL_X - 0.5f, 0.05);
+
+    // Surfaces under the platform: deck and ground.
+    const Vector3 deck = Wow(-425.0f, 0.0f, -425.0f);
+    const SurfacesRequestData surfaces{TestWorld::MAP_ID, 0, deck.x, deck.y, 50.0f, -50.0f};
+    response = client.Request(MessageType::SURFACES, surfaces);
+    REQUIRE(response && response->size() == sizeof(SurfacesResponseHeader) + 2 * sizeof(SurfaceData));
+    SurfacesResponseHeader header{};
+    std::memcpy(&header, response->data(), sizeof(header));
+    CHECK_EQ(header.count, 2);
+    CHECK_EQ(header.areaId, 12u);
+    SurfaceData top{};
+    std::memcpy(&top, response->data() + sizeof(header), sizeof(top));
+    CHECK_NEAR(top.z, TestWorld::PLATFORM_Y, 0.01);
+    CHECK_EQ(top.source, TestWorld::PLATFORM_SOURCE);
+    CHECK_EQ(top.flags, SURFACE_STANDABLE);
+
+    // Too small requests get the failure answer.
+    REQUIRE(client.SendRequest(static_cast<unsigned char>(MessageType::SURFACES), &surfaces, 4));
+    const auto small = client.ReadResponse(static_cast<unsigned char>(MessageType::SURFACES));
+    REQUIRE(small && small->size() == sizeof(SurfacesResponseHeader));
+    std::memcpy(&header, small->data(), sizeof(header));
+    CHECK_EQ(header.count, -1);
+}

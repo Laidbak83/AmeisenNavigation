@@ -241,10 +241,14 @@ inline bool Add(const GameObjectSpawn& spawn, const std::string& modelPath, Cach
 {
     const std::string lower = Lower(modelPath);
     const Matrix4x4 transform = SpawnTransform(spawn);
+    const size_t first = structure->tris.size();
+    const uint32_t source = AnpWorld::MakeSource(AnpWorld::SourceKind::GAME_OBJECT, spawn.displayId);
 
     if (lower.ends_with(".wmo"))
     {
-        return ExtractWmo(modelPath.c_str(), transform, 0, reader, structure, liquidTypes, DOODAD);
+        const bool added = ExtractWmo(modelPath.c_str(), transform, 0, reader, structure, liquidTypes, DOODAD);
+        structure->TagSources(first, source);
+        return added;
     }
 
     // .mdx/.mdl (DBC names) and .m2 all mean the M2 file.
@@ -258,6 +262,7 @@ inline bool Add(const GameObjectSpawn& spawn, const std::string& modelPath, Cach
     }
 
     AddM2Collision(m2, transform, structure, DOODAD);
+    structure->TagSources(first, source);
     return true;
 }
 } // namespace GameObjects

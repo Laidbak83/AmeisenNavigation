@@ -46,6 +46,9 @@ namespace AmeisenNavigation.Client
             Steer,
             ReportStuck,
             PathEx,
+            LineOfSight,
+            Surfaces,
+            Sweep,
         }
 
         private readonly AnTcpClient _client;
@@ -279,6 +282,108 @@ namespace AmeisenNavigation.Client
                 var request = new ReportStuckData { MapId = mapId, Position = position, Radius = radius };
                 return SendWithReconnect(() => _client.Send((byte)MessageType.ReportStuck, request).As<bool>(), false);
             }
+        }
+
+        /// <summary>
+        /// Line of sight against the collision geometry the navmesh was built from (static world), with what blocks
+        /// it. Pass eye positions (feet + about 1.7 yards). Liquids never block. Requires protocol version 4 and a
+        /// .anw file for the map (exporter 1.12+).
+        /// </summary>
+        public WorldHit LineOfSight(int mapId, Vector3 start, Vector3 end, WorldIgnore ignore = WorldIgnore.None)
+        {
+            var request = new LineOfSightData { MapId = mapId, Flags = (int)ignore, Start = start, End = end };
+
+            lock (_lock)
+            {
+                return SendWithReconnect(() => ToWorldHit(_client.Send((byte)MessageType.LineOfSight, request)), default);
+            }
+        }
+
+        /// <summary>
+        /// Move a standing body (radius, height, feet at the positions) from start to end: the first geometry it runs
+        /// into above <paramref name="stepHeight"/> (steps and slopes below it are walked over). Catches what the
+        /// navmesh rounds away (thin posts, branches at head height). Requires protocol version 4 and a .anw file.
+        /// </summary>
+        public WorldHit Sweep(int mapId, Vector3 start, Vector3 end, float radius = 0.5f, float height = 2f,
+                              float stepHeight = 0.5f, WorldIgnore ignore = WorldIgnore.None)
+        {
+            var request = new SweepData
+            {
+                MapId = mapId,
+                Flags = (int)ignore,
+                Start = start,
+                End = end,
+                Radius = radius,
+                Height = height,
+                StepHeight = stepHeight,
+            };
+
+            lock (_lock)
+            {
+                return SendWithReconnect(() => ToWorldHit(_client.Send((byte)MessageType.Sweep, request)), default);
+            }
+        }
+
+        /// <summary>
+        /// Every surface under (x, y) between zTop and zBottom (bridges, decks, floors of a building, the ground,
+        /// water) with where it comes from, highest first, and the AreaTable id there. Null if the server has no
+        /// static world there. Requires protocol version 4 and a .anw file.
+        /// </summary>
+        public WorldSurfaces? GetSurfaces(int mapId, float x, float y, float zTop, float zBottom,
+                                          WorldIgnore ignore = WorldIgnore.None)
+        {
+            var request = new SurfacesRequestData
+            {
+                MapId = mapId,
+                Flags = (int)ignore,
+                X = x,
+                Y = y,
+                ZTop = zTop,
+                ZBottom = zBottom,
+            };
+
+            lock (_lock)
+            {
+                return SendWithReconnect<WorldSurfaces?>(() =>
+                {
+                    var response = _client.Send((byte)MessageType.Surfaces, request);
+                    return ParseSurfaces(response.Data);
+                }, null);
+            }
+        }
+
+        private static WorldHit ToWorldHit(AnTCP.Client.Objects.AnTcpResponse response)
+        {
+            if (!response.TryAs(out WorldHitResponse hit) || hit.Result < 0)
+                return default;
+
+            return new WorldHit(true, hit.Result == 1, hit.T, hit.Position, hit.Normal, new WorldSource(hit.Source),
+                                hit.Area);
+        }
+
+        private static WorldSurfaces? ParseSurfaces(ReadOnlySpan<byte> data)
+        {
+            int headerSize = Marshal.SizeOf<SurfacesResponseHeader>();
+            int surfaceSize = Marshal.SizeOf<SurfaceData>();
+
+            if (data.Length < headerSize)
+                return null;
+
+            var header = MemoryMarshal.Read<SurfacesResponseHeader>(data);
+
+            if (header.Count < 0 || data.Length != headerSize + (long)header.Count * surfaceSize)
+                return null;
+
+            var surfaces = new WorldSurface[header.Count];
+
+            for (int i = 0; i < header.Count; i++)
+            {
+                var s = MemoryMarshal.Read<SurfaceData>(data.Slice(headerSize + i * surfaceSize, surfaceSize));
+                surfaces[i] = new WorldSurface(s.Z, s.Normal, new WorldSource(s.Source), s.Area, (s.Flags & 1) != 0,
+                                               (s.Flags & 2) != 0);
+            }
+
+            return new WorldSurfaces(surfaces, header.AreaId);
         }
 
         /// <summary>Maximum number of polygon vertices accepted by <see cref="ExplorePolygon"/>.</summary>
