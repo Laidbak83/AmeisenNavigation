@@ -119,6 +119,23 @@ TEST_CASE(Config_MmapFormatMapping)
     CHECK(NavServer::ToMmapFormat(0) == MmapFormat::UNKNOWN);
     CHECK(NavServer::ToMmapFormat(1) == MmapFormat::TC335A);
     CHECK(NavServer::ToMmapFormat(2) == MmapFormat::SF548);
+    CHECK(NavServer::ToMmapFormat(3) == MmapFormat::TC_MASTER);
+}
+
+TEST_CASE(Config_ParentMaps)
+{
+    std::unordered_map<int, int> pairs;
+    CHECK(AmeisenNavConfig::ParseMapPairs(" 2552:0, 1220 : 1 ,", &pairs));
+    CHECK_EQ(pairs.size(), size_t{2});
+    CHECK_EQ(pairs[2552], 0);
+    CHECK_EQ(pairs[1220], 1);
+
+    std::string error;
+    CHECK(!AmeisenNavConfig::ParseMapPairs("2552", nullptr, &error));
+    CHECK(error.find("2552") != std::string::npos);
+    CHECK(!AmeisenNavConfig::ParseMapPairs("a:1", nullptr));
+    CHECK(!AmeisenNavConfig::ParseMapPairs("1:-2", nullptr));
+    CHECK(AmeisenNavConfig::ParseMapPairs("", nullptr));
 }
 
 TEST_CASE(Config_EnvironmentOverrides)

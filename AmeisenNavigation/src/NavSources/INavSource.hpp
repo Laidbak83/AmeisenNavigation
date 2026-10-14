@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <unordered_map>
@@ -13,10 +14,36 @@
 class INavSource
 {
 public:
+    /// Runs on a freshly loaded navmesh before it is published (e.g. to add off-mesh links), on the loading thread.
+    using PostLoadFn = std::function<void(int mapId, dtNavMesh& navMesh)>;
+
     virtual ~INavSource() noexcept = default;
 
     /// Returns the navmesh for mapId (loading it on first use) or nullptr if it doesn't exist.
     virtual dtNavMesh* Get(int mapId) noexcept = 0;
+
+    /// Set before the first Get().
+    void SetPostLoad(PostLoadFn fn) { PostLoad = std::move(fn); }
+
+protected:
+    PostLoadFn PostLoad;
+
+    /// Apply the post-load step (exceptions leave the navmesh as loaded).
+    NavMeshPtr Finish(int mapId, NavMeshPtr navMesh) const noexcept
+    {
+        if (navMesh && PostLoad)
+        {
+            try
+            {
+                PostLoad(mapId, *navMesh);
+            }
+            catch (...)
+            {
+            }
+        }
+
+        return navMesh;
+    }
 };
 
 /// Thread-safe "load once per map" cache shared by the nav sources.

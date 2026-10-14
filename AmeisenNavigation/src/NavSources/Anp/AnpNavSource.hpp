@@ -46,7 +46,7 @@ public:
                  result.tilesRejected ? std::to_string(result.tilesRejected) + " rejected)" : std::string(), " in ",
                  ms, "ms");
 
-            return std::move(result.navMesh);
+            return Finish(id, std::move(result.navMesh));
         });
     }
 };

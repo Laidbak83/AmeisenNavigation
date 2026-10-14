@@ -1,0 +1,331 @@
+#include "TestFramework.hpp"
+
+#include <cstring>
+#include <filesystem>
+#include <format>
+#include <fstream>
+
+#include "AmeisenNavigation.hpp"
+#include "NavSources/OffMesh/TileRebuilder.hpp"
+#include "TestWorld.hpp"
+
+namespace {
+using TestWorld::Wow;
+
+/// The test world's tiles as a TrinityCore master MMAP folder (MMAP v16: .mmap with a header, maxPolys written as
+/// 1u << DT_POLY_BITS like the real generator).
+std::filesystem::path WriteTcMasterMmaps(const char* name, int mapId)
+{
+    const auto dir = std::filesystem::temp_directory_path() / "anav_tests" / name;
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+
+    const auto loaded = Anp::Load(TestWorld::Get().meshDir / Anp::FileName(TestWorld::MAP_ID));
+    REQUIRE(loaded.navMesh);
+
+    MmapNavMeshHeader header{};
+    header.mmapMagic = MMAP_MAGIC;
+    header.mmapVersion = MMAP_VERSION_NAVMESH_HEADER;
+    header.params = *loaded.navMesh->getParams();
+    header.params.maxPolys = static_cast<int>(1u << DT_POLY_BITS);
+    header.offmeshConnectionCount = 1;
+
+    MmapOffMeshData offMesh{};
+    offMesh.mapId = static_cast<uint32_t>(mapId);
+    offMesh.connectionFlags = 1;
+
+    {
+        std::ofstream out(dir / std::format("{:04}.mmap", mapId), std::ios::binary);
+        out.write(reinterpret_cast<const char*>(&header), sizeof(header));
+        out.write(reinterpret_cast<const char*>(&offMesh), sizeof(offMesh));
+    }
+
+    const dtNavMesh& mesh = *loaded.navMesh;
+
+    for (int i = 0; i < mesh.getMaxTiles(); ++i)
+    {
+        const dtMeshTile* tile = mesh.getTile(i);
+
+        if (!tile || !tile->header)
+        {
+            continue;
+        }
+
+        MmapTileHeader tileHeader{};
+        tileHeader.mmapMagic = MMAP_MAGIC;
+        tileHeader.dtVersion = DT_NAVMESH_VERSION;
+        tileHeader.mmapVersion = MMAP_VERSION_NAVMESH_HEADER;
+        tileHeader.size = static_cast<uint32_t>(tile->dataSize);
+        tileHeader.usesLiquids = 1;
+
+        std::ofstream out(dir / std::format("{:04}_{:02}_{:02}.mmtile", mapId, tile->header->x, tile->header->y),
+                          std::ios::binary);
+        out.write(reinterpret_cast<const char*>(&tileHeader), sizeof(tileHeader));
+        out.write(reinterpret_cast<const char*>(tile->data), tile->dataSize);
+    }
+
+    return dir;
+}
+} // namespace
+
+TEST_CASE(Mmap_TrinityCoreMasterIsDetectedAndLoaded)
+{
+    const auto dir = WriteTcMasterMmaps("mmap_tc_master", TestWorld::MAP_ID);
+    CHECK(MmapNavSource::DetectFormat(dir) == MmapFormat::TC_MASTER);
+
+    AmeisenNavigationSettings settings;
+    settings.meshFolder = dir;
+    AmeisenNavigation nav(settings);
+    CHECK(nav.GetMmapFormat() == MmapFormat::TC_MASTER);
+    REQUIRE(nav.NewClient(1));
+
+    // Same path as on the ANP world: across both tiles and around the wall.
+    Path path(256);
+    REQUIRE(nav.GetPath(1, TestWorld::MAP_ID, Wow(-700.0f, 0.0f, -300.0f), Wow(-200.0f, 0.0f, -300.0f), path));
+    CHECK(path.pointCount >= 3);
+}
+
+TEST_CASE(Mmap_ChildMapsUseTheParentsFiles)
+{
+    const auto dir = WriteTcMasterMmaps("mmap_parent", TestWorld::MAP_ID);
+
+    AmeisenNavigationSettings settings;
+    settings.meshFolder = dir;
+    settings.mmapFormat = MmapFormat::TC_MASTER;
+    settings.parentMaps = {{7, 5}, {5, TestWorld::MAP_ID}};
+    AmeisenNavigation nav(settings);
+    REQUIRE(nav.NewClient(1));
+
+    Path path(256);
+    CHECK(nav.GetPath(1, 7, Wow(-700.0f, 0.0f, -300.0f), Wow(-200.0f, 0.0f, -300.0f), path));
+    CHECK(!nav.GetPath(1, 8, Wow(-700.0f, 0.0f, -300.0f), Wow(-200.0f, 0.0f, -300.0f), path));
+}
+
+TEST_CASE(Mmap_ReadsBothParamsLayouts)
+{
+    const auto dir = std::filesystem::temp_directory_path() / "anav_tests" / "mmap_params";
+    std::filesystem::create_directories(dir);
+
+    dtNavMeshParams params{};
+    params.orig[0] = -1.0f;
+    params.tileWidth = params.tileHeight = 533.33333f;
+    params.maxTiles = 4096;
+    params.maxPolys = 1 << 20;
+
+    {
+        std::ofstream out(dir / "raw.mmap", std::ios::binary);
+        out.write(reinterpret_cast<const char*>(&params), sizeof(params));
+    }
+
+    MmapNavMeshHeader header{MMAP_MAGIC, 16, params, 0};
+    {
+        std::ofstream out(dir / "v16.mmap", std::ios::binary);
+        out.write(reinterpret_cast<const char*>(&header), sizeof(header));
+    }
+
+    header.mmapVersion = 15;
+    {
+        std::ofstream out(dir / "old.mmap", std::ios::binary);
+        out.write(reinterpret_cast<const char*>(&header), sizeof(header));
+    }
+
+    {
+        std::ofstream out(dir / "short.mmap", std::ios::binary);
+        out.write(reinterpret_cast<const char*>(&header), 12);
+    }
+
+    dtNavMeshParams read{};
+    CHECK(MmapNavSource::ReadNavMeshParams(dir / "raw.mmap", read));
+    CHECK(std::memcmp(&read, &params, sizeof(params)) == 0);
+
+    read = {};
+    CHECK(MmapNavSource::ReadNavMeshParams(dir / "v16.mmap", read));
+    CHECK(std::memcmp(&read, &params, sizeof(params)) == 0);
+
+    CHECK(!MmapNavSource::ReadNavMeshParams(dir / "old.mmap", read));
+    CHECK(!MmapNavSource::ReadNavMeshParams(dir / "short.mmap", read));
+    CHECK(!MmapNavSource::ReadNavMeshParams(dir / "missing.mmap", read));
+
+    // maxPolys is unused with 64 bit poly refs, TrinityCore master writes a negative int.
+    params.maxPolys = static_cast<int>(1u << 31);
+    CHECK(ValidateNavMeshParams(params));
+    params.maxPolys = 0;
+    CHECK(!ValidateNavMeshParams(params));
+}
+
+namespace {
+NavMeshPtr LoadWorld()
+{
+    auto loaded = Anp::Load(TestWorld::Get().meshDir / Anp::FileName(TestWorld::MAP_ID));
+    REQUIRE(loaded.navMesh);
+    return std::move(loaded.navMesh);
+}
+
+/// Path length between two RD positions with a plain filter, -1 if there is no complete path.
+float RdPathLength(const dtNavMesh& mesh, const Vector3& start, const Vector3& end, int* offMeshCorners = nullptr)
+{
+    NavMeshQueryPtr query(dtAllocNavMeshQuery());
+    REQUIRE(dtStatusSucceed(query->init(&mesh, 4096)));
+    dtQueryFilter filter;
+    const float extents[3]{2.0f, 4.0f, 2.0f};
+    dtPolyRef startRef = 0;
+    dtPolyRef endRef = 0;
+    Vector3 s;
+    Vector3 e;
+    REQUIRE(dtStatusSucceed(query->findNearestPoly(start, extents, &filter, &startRef, s)) && startRef);
+    REQUIRE(dtStatusSucceed(query->findNearestPoly(end, extents, &filter, &endRef, e)) && endRef);
+
+    dtPolyRef polys[1024];
+    int polyCount = 0;
+    const dtStatus status = query->findPath(startRef, endRef, s, e, &filter, polys, &polyCount, 1024);
+
+    if (dtStatusFailed(status) || polyCount == 0 || polys[polyCount - 1] != endRef)
+    {
+        return -1.0f;
+    }
+
+    float points[256 * 3];
+    unsigned char flags[256];
+    int pointCount = 0;
+    REQUIRE(dtStatusSucceed(query->findStraightPath(s, e, polys, polyCount, points, flags, nullptr, &pointCount, 256)));
+
+    float length = 0.0f;
+
+    for (int i = 1; i < pointCount; ++i)
+    {
+        length += dtVdist(&points[(i - 1) * 3], &points[i * 3]);
+    }
+
+    if (offMeshCorners)
+    {
+        *offMeshCorners = 0;
+
+        for (int i = 0; i < pointCount; ++i)
+        {
+            *offMeshCorners += (flags[i] & DT_STRAIGHTPATH_OFFMESH_CONNECTION) ? 1 : 0;
+        }
+    }
+
+    return length;
+}
+
+int GroundPolyCount(const dtNavMesh& mesh)
+{
+    int count = 0;
+
+    for (int i = 0; i < mesh.getMaxTiles(); ++i)
+    {
+        const dtMeshTile* tile = mesh.getTile(i);
+        count += tile && tile->header ? tile->header->offMeshBase : 0;
+    }
+
+    return count;
+}
+} // namespace
+
+TEST_CASE(OffMesh_RebuildWithoutLinksKeepsTheTile)
+{
+    NavMeshPtr mesh = LoadWorld();
+    const int polys = GroundPolyCount(*mesh);
+    const Vector3 start{-700.0f, 0.0f, -300.0f};
+    const Vector3 end{-200.0f, 0.0f, -300.0f};
+    const float before = RdPathLength(*mesh, start, end);
+    REQUIRE(before > 0.0f);
+
+    for (int i = 0; i < mesh->getMaxTiles(); ++i)
+    {
+        const dtMeshTile* tile = mesh->getTile(i);
+
+        if (tile && tile->header)
+        {
+            const dtTileRef ref = mesh->getTileRef(tile);
+            REQUIRE(TileRebuilder::Rebuild(*mesh, tile, {}));
+            CHECK_EQ(mesh->getTileRef(mesh->getTile(i)), ref); // same index and salt
+            CHECK(ValidateTileData(mesh->getTile(i)->data, static_cast<size_t>(mesh->getTile(i)->dataSize)));
+        }
+    }
+
+    CHECK_EQ(GroundPolyCount(*mesh), polys);
+    CHECK_NEAR(RdPathLength(*mesh, start, end), before, 0.05);
+
+    // Heights survive the requantization.
+    NavMeshQueryPtr query(dtAllocNavMeshQuery());
+    REQUIRE(dtStatusSucceed(query->init(mesh.get(), 256)));
+    dtQueryFilter filter;
+    const float platform[3]{-425.0f, TestWorld::PLATFORM_Y, -425.0f};
+    const float extents[3]{1.0f, 1.0f, 1.0f};
+    dtPolyRef ref = 0;
+    float nearest[3]{};
+    REQUIRE(dtStatusSucceed(query->findNearestPoly(platform, extents, &filter, &ref, nearest)) && ref);
+    CHECK(nearest[1] >= TestWorld::PLATFORM_Y - 0.01f && nearest[1] < TestWorld::PLATFORM_Y + 1.0f);
+}
+
+TEST_CASE(OffMesh_LinkShortcutsTheWall)
+{
+    NavMeshPtr mesh = LoadWorld();
+    const Vector3 start{-700.0f, 0.0f, -300.0f};
+    const Vector3 end{-200.0f, 0.0f, -300.0f};
+    const float detour = RdPathLength(*mesh, start, end);
+    REQUIRE(detour > 550.0f);
+
+    OffMeshLink link;
+    link.start = {TestWorld::WALL_X - 3.0f, 0.0f, -300.0f};
+    link.end = {TestWorld::WALL_X + 4.0f, 0.0f, -300.0f};
+    link.radius = 1.5f;
+    link.area = TERRAIN_GROUND;
+    link.flags = NAV_GROUND;
+    link.userId = static_cast<unsigned int>(OffMeshLinkKind::JUMP);
+
+    CHECK_EQ(TileRebuilder::AddOffMeshLinks(*mesh, std::span(&link, 1)), 1);
+
+    int offMeshCorners = 0;
+    const float shortcut = RdPathLength(*mesh, start, end, &offMeshCorners);
+    CHECK(shortcut > 0.0f && shortcut < 510.0f);
+    CHECK_EQ(offMeshCorners, 1);
+
+    // One way: the way back still goes around.
+    CHECK(RdPathLength(*mesh, end, start) > 550.0f);
+}
+
+TEST_CASE(OffMesh_LinkAcrossTilesIsConnectedOnBothEnds)
+{
+    NavMeshPtr mesh = LoadWorld();
+
+    // Tile border at x = -TILESIZE: start in the western tile, end in the eastern one.
+    OffMeshLink link;
+    link.start = {-TILESIZE - 3.0f, 0.0f, -200.0f};
+    link.end = {-TILESIZE + 3.0f, 0.0f, -200.0f};
+    link.radius = 1.0f;
+    link.bidirectional = true;
+    link.area = TERRAIN_GROUND;
+    link.flags = NAV_GROUND;
+    REQUIRE(TileRebuilder::AddOffMeshLinks(*mesh, std::span(&link, 1)) == 2);
+
+    const dtMeshTile* startTile = nullptr;
+
+    for (int i = 0; i < mesh->getMaxTiles(); ++i)
+    {
+        const dtMeshTile* tile = mesh->getTile(i);
+
+        if (tile && tile->header && tile->header->offMeshConCount == 1)
+        {
+            startTile = tile;
+        }
+    }
+
+    REQUIRE(startTile != nullptr);
+    const dtPoly& poly = startTile->polys[startTile->offMeshCons[0].poly];
+    int links = 0;
+
+    for (unsigned int l = poly.firstLink; l != DT_NULL_LINK; l = startTile->links[l].next)
+    {
+        links++;
+    }
+
+    CHECK_EQ(links, 2); // start and end landing polygons
+
+    // Links outside the navmesh are ignored.
+    OffMeshLink outside = link;
+    outside.start = {5000.0f, 0.0f, 5000.0f};
+    CHECK_EQ(TileRebuilder::AddOffMeshLinks(*mesh, std::span(&outside, 1)), 0);
+}

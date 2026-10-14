@@ -93,6 +93,7 @@ struct AmeisenNavigationSettings
     bool useAnp = false;
     MmapFormat mmapFormat = MmapFormat::UNKNOWN;
     MmapNavSource::Patterns customMmapPatterns{};
+    std::unordered_map<int, int> parentMaps; // MMAPs: child map id -> parent map id (files fall back to the parent)
     int maxPolyPath = 2048;
     int maxPointPath = 512;
     int maxSearchNodes = 65535;

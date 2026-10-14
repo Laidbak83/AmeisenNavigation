@@ -53,7 +53,8 @@ AmeisenNavigation::AmeisenNavigation(const AmeisenNavigationSettings& settings) 
     else
     {
         auto mmapSource =
-            std::make_unique<MmapNavSource>(Settings.meshFolder, Settings.mmapFormat, Settings.customMmapPatterns);
+            std::make_unique<MmapNavSource>(Settings.meshFolder, Settings.mmapFormat, Settings.customMmapPatterns,
+                                            Settings.parentMaps);
         Settings.mmapFormat = mmapSource->GetFormat();
         FilterProvider =
             std::make_unique<MmapQueryFilterProvider>(Settings.mmapFormat, Settings.waterCost, Settings.badLiquidCost);

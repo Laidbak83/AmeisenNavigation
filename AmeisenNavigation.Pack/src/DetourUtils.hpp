@@ -45,13 +45,14 @@ constexpr int MAX_TILE_COORD = 1 << 16;
 /// Largest serialized tile accepted from a file (real tiles are a few MB at most).
 constexpr size_t MAX_TILE_DATA_SIZE = 256u * 1024u * 1024u;
 
-/// Sanity check navmesh parameters read from a file before dtNavMesh::init.
+/// Sanity check navmesh parameters read from a file before dtNavMesh::init. maxPolys is unused with 64 bit poly
+/// refs, TrinityCore master writes 1u << DT_POLY_BITS which is negative as an int.
 inline bool ValidateNavMeshParams(const dtNavMeshParams& params) noexcept
 {
     return std::isfinite(params.orig[0]) && std::isfinite(params.orig[1]) && std::isfinite(params.orig[2])
            && std::isfinite(params.tileWidth) && std::isfinite(params.tileHeight) && params.tileWidth > 0.0f
            && params.tileHeight > 0.0f && params.maxTiles > 0 && params.maxTiles <= MAX_NAVMESH_TILES
-           && params.maxPolys > 0;
+           && params.maxPolys != 0;
 }
 
 /// Validate a serialized Detour tile before handing it to dtNavMesh::addTile.

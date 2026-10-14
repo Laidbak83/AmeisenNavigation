@@ -9,6 +9,7 @@
 #include <map>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <variant>
 #include <vector>
 
@@ -38,7 +39,7 @@ struct AmeisenNavConfig
     int maxPointPath = 512;
     int maxPolyPath = 2048;
     int maxSearchNodes = 65535;
-    int mmapFormat = 0; // -1 = custom patterns, 0 = auto detect, 1 = TrinityCore 3.3.5a, 2 = SkyFire 5.4.8
+    int mmapFormat = 0; // -1 = custom patterns, 0 = auto, 1 = TC 3.3.5a, 2 = SkyFire 5.4.8, 3 = TC master (v16)
     int port = 47110;
     std::string customMmapPattern = "{:03}.mmap";
     std::string customMmtilePattern = "{:03}{:02}{:02}.mmtile";
@@ -49,6 +50,7 @@ struct AmeisenNavConfig
     std::string mmapsPath = "./meshes/";
 #endif
     std::string preloadMaps = ""; // comma separated map ids loaded at startup, e.g. "0,1,530,571"
+    std::string parentMaps = "";  // MMAP files of a child map fall back to its parent's: "child:parent,...", e.g. "2552:0"
 
     // ── Serialization ────────────────────────────────────────────────
 
@@ -172,6 +174,55 @@ struct AmeisenNavConfig
         }
 
         return applied;
+    }
+
+    /// Parse "a:b, c:d" pairs of map ids (sParentMaps). Returns false and sets *error for malformed entries.
+    static bool ParseMapPairs(std::string_view text, std::unordered_map<int, int>* out, std::string* error = nullptr)
+    {
+        std::string_view rest = text;
+
+        while (!rest.empty())
+        {
+            const auto comma = rest.find(',');
+            const std::string_view token = Trim(rest.substr(0, comma));
+
+            if (!token.empty())
+            {
+                const auto colon = token.find(':');
+                int a = 0;
+                int b = 0;
+                const std::string_view first = colon == std::string_view::npos ? token : Trim(token.substr(0, colon));
+                const std::string_view second =
+                    colon == std::string_view::npos ? std::string_view{} : Trim(token.substr(colon + 1));
+                const auto [p1, e1] = std::from_chars(first.data(), first.data() + first.size(), a);
+                const auto [p2, e2] = std::from_chars(second.data(), second.data() + second.size(), b);
+
+                if (colon == std::string_view::npos || e1 != std::errc() || p1 != first.data() + first.size()
+                    || e2 != std::errc() || p2 != second.data() + second.size() || a < 0 || b < 0)
+                {
+                    if (error)
+                    {
+                        *error = "invalid entry \"" + std::string(token) + "\", expected child:parent";
+                    }
+
+                    return false;
+                }
+
+                if (out)
+                {
+                    (*out)[a] = b;
+                }
+            }
+
+            if (comma == std::string_view::npos)
+            {
+                break;
+            }
+
+            rest = rest.substr(comma + 1);
+        }
+
+        return true;
     }
 
     /// Parse sPreloadMaps ("0, 1,530") into map ids, invalid entries are skipped.
@@ -316,6 +367,7 @@ private:
             {"sCustomMmtilePattern", std::ref(customMmtilePattern)},
             {"sIp", std::ref(ip)},
             {"sMmapsPath", std::ref(mmapsPath)},
+            {"sParentMaps", std::ref(parentMaps)},
             {"sPreloadMaps", std::ref(preloadMaps)},
         };
     }

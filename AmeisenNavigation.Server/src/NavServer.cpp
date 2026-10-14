@@ -66,6 +66,7 @@ NavServer::NavServer(const AmeisenNavConfig& config) : Cfg(config)
     settings.useAnp = Cfg.useAnpFileFormat;
     settings.mmapFormat = ToMmapFormat(Cfg.mmapFormat);
     settings.customMmapPatterns = {Cfg.customMmapPattern, Cfg.customMmtilePattern};
+    AmeisenNavConfig::ParseMapPairs(Cfg.parentMaps, &settings.parentMaps);
     settings.maxPolyPath = Cfg.maxPolyPath;
     settings.maxPointPath = Cfg.maxPointPath;
     settings.maxSearchNodes = Cfg.maxSearchNodes;
@@ -89,6 +90,7 @@ MmapFormat NavServer::ToMmapFormat(int configValue) noexcept
         case -1: return MmapFormat::CUSTOM;
         case 1: return MmapFormat::TC335A;
         case 2: return MmapFormat::SF548;
+        case 3: return MmapFormat::TC_MASTER;
         default: return MmapFormat::UNKNOWN;
     }
 }
@@ -142,9 +144,15 @@ void NavServer::ValidateConfig(AmeisenNavConfig& config, std::vector<std::string
         errors.push_back("iMaxPointPath is too large for a single response");
     }
 
-    if (config.mmapFormat < -1 || config.mmapFormat > 2)
+    if (config.mmapFormat < -1 || config.mmapFormat > 3)
     {
-        errors.push_back("iMmapFormat has to be -1 (custom), 0 (auto), 1 (TC 3.3.5a) or 2 (SkyFire 5.4.8)");
+        errors.push_back(
+            "iMmapFormat has to be -1 (custom), 0 (auto), 1 (TC 3.3.5a), 2 (SkyFire 5.4.8) or 3 (TC master)");
+    }
+
+    if (std::string error; !AmeisenNavConfig::ParseMapPairs(config.parentMaps, nullptr, &error))
+    {
+        errors.push_back("sParentMaps: " + error);
     }
 
     if (config.mmapFormat == -1 && (config.customMmapPattern.empty() || config.customMmtilePattern.empty()))
@@ -672,6 +680,7 @@ void NavServer::HandleGetConfig(ClientHandler* handler, AnTcpMessageType type, c
         case MmapFormat::TC335A: header.mmapFormat = 1; break;
         case MmapFormat::SF548: header.mmapFormat = 2; break;
         case MmapFormat::CUSTOM: header.mmapFormat = -1; break;
+        case MmapFormat::TC_MASTER: header.mmapFormat = 3; break;
         default: header.mmapFormat = 0; break;
     }
 

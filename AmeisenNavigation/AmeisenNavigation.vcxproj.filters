@@ -25,6 +25,7 @@
     <ClInclude Include="src\NavSources\IQueryFilterProvider.hpp" />
     <ClInclude Include="src\NavSources\Anp\AnpQueryFilterProvider.hpp" />
     <ClInclude Include="src\Utils\Logger.hpp" />
+    <ClInclude Include="src\NavSources\OffMesh\TileRebuilder.hpp" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\AmeisenNavigation.cpp" />
