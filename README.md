@@ -68,12 +68,13 @@ docker run -d -p 47110:47110 -v /srv/meshes:/meshes:ro ameisennav
 | `sWorldPath` | empty | Folder of the static worlds (`.anw`), empty = `sMmapsPath` |
 | `iWorldCacheTiles` | `48` | Static world tiles kept in memory per map |
 | `fWaypointSpacing`, `fWaypointHeightError` | `4`, `0.3` | DETAIL: longest distance between waypoints, height deviation that adds a waypoint |
+| `fEdgeMargin` | `1` | DETAIL: distance of the added waypoints from the navmesh edge (cliffs, docks, forbidden water), `0` = off |
 | `fBodyRadius`, `fBodyHeight`, `fBodyStepHeight` | `0.4`, `2`, `0.75` | Body swept by the clear body path flag; obstacles up to the step height are walked over |
 | `sParentMaps` | empty | MMAPs: `child:parent` map pairs (Map.db2 ParentMapID), a child map without its own files uses the parent's, e.g. `2552:0` |
 | `sCustomMmapPattern` / `sCustomMmtilePattern` | TC 3.3.5a names | `std::format` patterns for `iMmapFormat=-1` (args: mapId, x, y) |
 | `sPreloadMaps` | empty | Comma separated map ids loaded at startup, e.g. `0,1,530,571` |
 | `iMaxPolyPath` | `2048` | Max polygons of a path corridor |
-| `iMaxPointPath` | `512` | Max points of a returned path |
+| `iMaxPointPath` | `2048` | Max points of a returned path |
 | `iMaxSearchNodes` | `65535` | A* node pool size per client and map |
 | `fFactionDangerCost` | `3.0` | Cost multiplier for enemy faction areas (ANP) |
 | `fWaterCost` / `fBadLiquidCost` | `1.6` / `4.0` | Default costs of water/ocean and lava/slime (ANP and MMAP) |
@@ -301,8 +302,12 @@ surface (the right floor on stacked geometry): a point on each side of every cha
 floor, faction border), points where the height profile bends (crests, dips, stairs, bridge humps: the surface never
 leaves the straight line between two waypoints by more than `fWaypointHeightError`, 0.3 yards) and never more than
 `fWaypointSpacing` (4 yards) apart. Corners, start, end and off-mesh connections stay with their flags, new points have
-none. A path that wouldn't fit `iMaxPointPath` gets a larger spacing (the bends and ground changes stay). Optional
-trailer after the tuning trailer: `float spacing, float heightError` (`<= 0` = defaults).
+none. The added waypoints keep `fEdgeMargin` (1 yard) from the edge of the navmesh where the passage allows it,
+else they go to its middle: along a cliff, a dock or water the client forbids, the path runs a safe distance from the
+drop instead of on the eroded edge (the ground changes stay exactly where the ground changes). With the static world
+(`.anw`) every point's height is the true ground's instead of the navmesh's, which lies a little above it. A path
+that wouldn't fit `iMaxPointPath` gets a larger spacing (the bends and ground changes stay). Optional trailer after the
+tuning trailer: `float spacing, float heightError` (`<= 0` = defaults).
 
 **Surface info** (`8192`, PATH_EX): the response also carries, per point, the navmesh area under it (ANP area id, 0 =
 none) and what the ground does there: `1` the ground changes after this point (water, road, building floor, faction

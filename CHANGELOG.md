@@ -53,6 +53,10 @@ static world". Re-export to get the `.anw` and `gameobjects.ano` files.
 - Path flag `8192` SURFACE_INFO (PATH_EX): two more bytes per point, the navmesh area under it and `PathPointInfo`
   (ground change after the point, crest, dip, slope change, spacing point), announced by result flag `2`. Old clients
   never see them. C#: `PathFlags.SurfaceInfo`, `PathResult.Areas`/`Info`, `PathPointInfo`.
+- DETAIL keeps its waypoints `fEdgeMargin` (1 yard) from the navmesh edge where the passage allows it (middle of the
+  passage otherwise): cliffs, docks, forbidden water. With the static world the points take the true ground height.
+  Segments along the navmesh edge, where the navmesh raycast stops early, are detailed too (they used to stay plain).
+- `iMaxPointPath` defaults to 2048 (was 512): dense paths keep their spacing over 8 km instead of 2.
 
 ### Fixed
 

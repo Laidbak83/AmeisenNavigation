@@ -57,8 +57,9 @@ namespace AmeisenNavigation.Client
         /// <summary>
         /// Dense waypoints, all on the navmesh surface: where the ground changes (water, road, building floor,
         /// faction border), where the height profile bends (crests, dips, stairs, bridge humps) and at most
-        /// <see cref="PathTuning.WaypointSpacing"/> apart (server default fWaypointSpacing, 4 yards). Corners and
-        /// off-mesh connections stay as they are. Protocol 4.
+        /// <see cref="PathTuning.WaypointSpacing"/> apart (server default fWaypointSpacing, 4 yards), kept away from
+        /// the navmesh edge (fEdgeMargin: cliffs, docks) and on the true ground when the server has the static
+        /// world. Corners and off-mesh connections stay as they are. Protocol 4.
         /// </summary>
         Detail = 1 << 12,
 

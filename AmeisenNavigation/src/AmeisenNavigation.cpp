@@ -229,6 +229,7 @@ bool AmeisenNavigation::GetPath(size_t clientId, int mapId, const Vector3& start
     if (options && options->detail)
     {
         DetailPath(ctx.query, ctx.filter, path, flags, *options, pointInfo);
+        GroundPoints(mapId, path);
     }
 
     if (pointInfo && pointAreas)
@@ -356,6 +357,7 @@ bool AmeisenNavigation::GetRandomPath(size_t clientId, int mapId, const Vector3&
     if (options && options->detail)
     {
         DetailPath(ctx.query, ctx.filter, path, flags, *options, pointInfo);
+        GroundPoints(mapId, path);
     }
 
     if (pointInfo && pointAreas)

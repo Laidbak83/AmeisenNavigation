@@ -619,9 +619,10 @@ struct ProfileSample
 };
 
 /// Surface under a point of the segment from the polygons the raycast visited (in order, so the right floor is
-/// used on stacked geometry). hint: where to start looking.
-bool SurfaceAt(const dtNavMeshQuery* query, const dtPolyRef* visited, int count, int& hint, Vector3& pos,
-               unsigned char& area)
+/// used on stacked geometry), else from the nearest polygon holding the point (segments along the navmesh edge,
+/// where the raycast stops early). hint: where to start looking.
+bool SurfaceAt(const dtNavMeshQuery* query, const dtQueryFilter* filter, const dtPolyRef* visited, int count, int& hint,
+               Vector3& pos, unsigned char& area)
 {
     const auto test = [&](int i) {
         float height = 0.0f;
@@ -653,7 +654,33 @@ bool SurfaceAt(const dtNavMeshQuery* query, const dtPolyRef* visited, int count,
         }
     }
 
-    return false;
+    constexpr float EXTENTS[3]{0.3f, 3.0f, 0.3f};
+    dtPolyRef ref = 0;
+    float nearest[3]{};
+    float height = 0.0f;
+
+    if (dtStatusFailed(query->findNearestPoly(pos, EXTENTS, filter, &ref, nearest)) || !ref)
+    {
+        return false;
+    }
+
+    // getPolyHeight fails when the point lies outside the polygon: the sample is off the navmesh, unless it sits on
+    // the edge itself (a path along a wall), where the nearest point is as good.
+    if (dtStatusSucceed(query->getPolyHeight(ref, pos, &height)))
+    {
+        pos.y = height;
+    }
+    else if (Length2D(nearest[0] - pos.x, nearest[2] - pos.z) <= 0.2f)
+    {
+        pos.y = nearest[1];
+    }
+    else
+    {
+        return false;
+    }
+
+    query->getAttachedNavMesh()->getPolyArea(ref, &area);
+    return true;
 }
 
 /// Why a profile sample becomes a waypoint.
@@ -738,14 +765,14 @@ void AmeisenNavigation::DetailPath(const dtNavMeshQuery* query, const dtQueryFil
             PolyPosition start;
             dtRaycastHit hit{};
 
-            if (dtStatusFailed(query->findNearestPoly(a, RAYCAST_POLY_EXTENTS, filter, &start.poly, start.pos))
-                || !start.poly || !Raycast(query, filter, start, b, hit, visited, MAX_VISITED) || hit.t != FLT_MAX
-                || hit.pathCount <= 0)
+            if (dtStatusFailed(query->findNearestPoly(a, RAYCAST_POLY_EXTENTS, filter, &start.poly, start.pos)) ||
+                !start.poly)
             {
                 continue;
             }
 
-            const int count = hit.pathCount;
+            // Along the navmesh edge the raycast stops early: the samples past its end find their polygon themselves.
+            const int count = Raycast(query, filter, start, b, hit, visited, MAX_VISITED) ? hit.pathCount : 0;
             const int n = std::max(1, static_cast<int>(std::ceil(length / SAMPLE_STEP)));
             Segment& segment = segments[static_cast<size_t>(i)];
             segment.samples.reserve(static_cast<size_t>(n) + 1);
@@ -756,7 +783,7 @@ void AmeisenNavigation::DetailPath(const dtNavMeshQuery* query, const dtQueryFil
                 ProfileSample sample{};
                 sample.t = static_cast<float>(k) / static_cast<float>(n);
                 sample.pos = a + (b - a) * sample.t;
-                sample.onMesh = SurfaceAt(query, visited, count, hint, sample.pos, sample.area);
+                sample.onMesh = SurfaceAt(query, filter, visited, count, hint, sample.pos, sample.area);
 
                 if (k == 0 || k == n)
                 {
@@ -790,7 +817,7 @@ void AmeisenNavigation::DetailPath(const dtNavMeshQuery* query, const dtQueryFil
                         ProfileSample mid{};
                         mid.t = (lo + hi) * 0.5f;
                         mid.pos = a + (b - a) * mid.t;
-                        mid.onMesh = SurfaceAt(query, visited, count, hint, mid.pos, mid.area);
+                        mid.onMesh = SurfaceAt(query, filter, visited, count, hint, mid.pos, mid.area);
 
                         if (!mid.onMesh)
                         {
@@ -925,6 +952,30 @@ void AmeisenNavigation::DetailPath(const dtNavMeshQuery* query, const dtQueryFil
                     }
                 }
 
+                // Added points keep their distance from the navmesh edge (cliffs, docks, forbidden water); the
+                // ground changes stay where the ground changes. Each move has to stay on the navmesh both ways.
+                if (options.edgeMargin > 0.0f)
+                {
+                    const float margin = std::min(options.edgeMargin, MAX_WALL_MARGIN);
+
+                    for (size_t k = 1; k + 1 < points.size(); ++k)
+                    {
+                        if (pointFlags[k] != 0 || pointInfo[k] == 0 || (pointInfo[k] & POINT_INFO_SURFACE_CHANGE))
+                        {
+                            continue;
+                        }
+
+                        Vector3 moved;
+
+                        if (PushFromEdge(query, filter, points[k], points[k - 1], points[k + 1], margin, moved) &&
+                            SegmentClear(query, filter, points[k - 1], moved) &&
+                            SegmentClear(query, filter, moved, points[k + 1]))
+                        {
+                            points[k] = moved;
+                        }
+                    }
+                }
+
                 std::copy(points.begin(), points.end(), path.points);
                 std::copy(pointFlags.begin(), pointFlags.end(), flags);
 
@@ -941,6 +992,113 @@ void AmeisenNavigation::DetailPath(const dtNavMeshQuery* query, const dtQueryFil
         }
 
         // Even the bends don't fit: keep the plain path.
+    }
+    catch (...)
+    {
+    }
+}
+
+bool AmeisenNavigation::PushFromEdge(const dtNavMeshQuery* query, const dtQueryFilter* filter, const Vector3& point,
+                                     const Vector3& previous, const Vector3& next, float margin, Vector3& out) noexcept
+{
+    PolyPosition start;
+
+    if (dtStatusFailed(query->findNearestPoly(point, RAYCAST_POLY_EXTENTS, filter, &start.poly, start.pos)) ||
+        !start.poly)
+    {
+        return false;
+    }
+
+    // Room to either side of the path (across it), up to twice the margin: a raycast along the navmesh. The wall
+    // side of a point sitting on the edge has none, findDistanceToWall gives no direction there.
+    const float dx = next.x - previous.x;
+    const float dz = next.z - previous.z;
+    const float length = Length2D(dx, dz);
+
+    if (length < 1e-3f)
+    {
+        return false;
+    }
+
+    const Vector3 side{-dz / length, 0.0f, dx / length};
+    const float reach = margin * 2.0f;
+    float room[2]{reach, reach};
+
+    for (int i = 0; i < 2; ++i)
+    {
+        const float sign = i == 0 ? 1.0f : -1.0f;
+        dtRaycastHit hit{};
+
+        if (!Raycast(query, filter, start, start.pos + side * (sign * reach), hit))
+        {
+            room[i] = 0.0f;
+        }
+        else if (hit.t != FLT_MAX)
+        {
+            room[i] = hit.t * reach;
+        }
+    }
+
+    const int near = room[0] < room[1] ? 0 : 1;
+
+    if (room[near] >= margin - 0.01f)
+    {
+        return false; // far enough from both edges
+    }
+
+    // Towards the far side, up to the margin or the middle of the passage.
+    const float move = std::min(margin - room[near], std::max(0.0f, (room[1 - near] - room[near]) * 0.5f));
+
+    if (move < 0.05f)
+    {
+        return false;
+    }
+
+    out = start.pos + side * (near == 0 ? -move : move);
+    return SnapToSurface(query, filter, out) && out.DistanceTo(start.pos) > 0.05f;
+}
+
+void AmeisenNavigation::GroundPoints(int mapId, Path& path) noexcept
+{
+    World::StaticWorld* world = Worlds.Get(mapId);
+
+    if (!world)
+    {
+        return;
+    }
+
+    try
+    {
+        std::vector<World::Surface> surfaces;
+
+        for (int i = 0; i < path.pointCount; ++i)
+        {
+            Vector3 wow = path[i];
+            wow.ToWowCoords();
+            uint32_t areaId = 0;
+
+            // The navmesh lies up to a few cell heights above the geometry it was built from, never far below it.
+            if (!world->Surfaces(wow.x, wow.y, wow.z + 1.0f, wow.z - 2.5f, 0, surfaces, areaId) || surfaces.empty())
+            {
+                continue;
+            }
+
+            const World::Surface* best = nullptr;
+
+            for (const World::Surface& surface : surfaces)
+            {
+                if ((surface.standable || surface.liquid) &&
+                    (!best || std::fabs(surface.z - wow.z) < std::fabs(best->z - wow.z)))
+                {
+                    best = &surface;
+                }
+            }
+
+            if (best)
+            {
+                path[i].y = best->z;
+            }
+        }
     }
     catch (...)
     {

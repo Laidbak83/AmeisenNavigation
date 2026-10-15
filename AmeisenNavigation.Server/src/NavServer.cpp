@@ -161,6 +161,11 @@ void NavServer::ValidateConfig(AmeisenNavConfig& config, std::vector<std::string
         errors.push_back("fWaypointSpacing has to be 1-100, fWaypointHeightError 0.05-10");
     }
 
+    if (!(config.edgeMargin >= 0.0f && config.edgeMargin <= MAX_WALL_MARGIN))
+    {
+        errors.push_back("fEdgeMargin has to be 0-10");
+    }
+
     if (config.worldCacheTiles < 1 || config.worldCacheTiles > 4096)
     {
         errors.push_back("iWorldCacheTiles has to be between 1 and 4096");
@@ -522,6 +527,7 @@ PathOptions NavServer::MakePathOptions(int flags, const PathTuningData* tuning,
             options.waypointHeightError = std::clamp(detail->heightError, MIN_WAYPOINT_HEIGHT_ERROR, 10.0f);
         }
     }
+    options.edgeMargin = Cfg.edgeMargin;
     options.bodyRadius = Cfg.bodyRadius;
     options.bodyHeight = Cfg.bodyHeight;
     options.bodyStepHeight = Cfg.bodyStepHeight;

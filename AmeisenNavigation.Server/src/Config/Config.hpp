@@ -42,6 +42,7 @@ struct AmeisenNavConfig
     float waterCost = 1.6f;  // water, ocean
     float waypointHeightError = 0.3f; // DETAIL: how far the surface may leave the line between two waypoints
     float waypointSpacing = 4.0f;     // DETAIL: longest distance between two waypoints
+    float edgeMargin = 1.0f;          // DETAIL: distance of the added waypoints from the navmesh edge, 0 = off
     int bezierCurvePoints = 8;
     int catmullRomSplinePoints = 4;
     int cornerPoints = 4; // ROUND_CORNERS points per arc
@@ -49,7 +50,7 @@ struct AmeisenNavConfig
     int maxClients = 1024;        // simultaneous connections (one thread each), 0 = unlimited
     int worldCacheTiles = 48;     // static world tiles (.anw) kept in memory per map
     int statsIntervalSec = 300;   // log request counts/latencies this often (only if there were requests), 0 = off
-    int maxPointPath = 512;
+    int maxPointPath = 2048;
     int maxPolyPath = 2048;
     int maxSearchNodes = 65535;
     int mmapFormat = 0; // -1 = custom patterns, 0 = auto, 1 = TC 3.3.5a, 2 = SkyFire 5.4.8, 3 = TC master (v16)
@@ -383,6 +384,7 @@ private:
             {"fBodyHeight", std::ref(bodyHeight)},
             {"fWaypointSpacing", std::ref(waypointSpacing)},
             {"fWaypointHeightError", std::ref(waypointHeightError)},
+            {"fEdgeMargin", std::ref(edgeMargin)},
             {"fBodyRadius", std::ref(bodyRadius)},
             {"fBodyStepHeight", std::ref(bodyStepHeight)},
             {"iWorldCacheTiles", std::ref(worldCacheTiles)},

@@ -277,3 +277,91 @@ TEST_CASE(Detail_SurfaceInfo)
         CHECK((info[i] & ~POINT_INFO_SURFACE_CHANGE) == 0);
     }
 }
+
+TEST_CASE(Detail_KeepsAddedPointsFromEdges)
+{
+    // Along the wall (x = -300), one yard from it: the added points move away from the navmesh edge, the ends and the
+    // plain corners stay.
+    AmeisenNavigation nav = MakeNav(TestWorld::Get().meshDir);
+    REQUIRE(nav.NewClient(1));
+    const Vector3 a = Wow(TestWorld::WALL_X - 1.0f, 0.0f, -400.0f);
+    const Vector3 b = Wow(TestWorld::WALL_X - 1.0f, 0.0f, -200.0f);
+    Path path(512);
+    PathOptions options;
+    options.detail = true;
+
+    const auto closest = [&](float& ends) {
+        float best = 1000.0f;
+        ends = std::max(path[0].DistanceTo(a), path[path.pointCount - 1].DistanceTo(b));
+
+        for (int i = 1; i + 1 < path.pointCount; ++i)
+        {
+            best = std::min(best, TestWorld::WALL_X - path[i].y); // WoW y = RD x, the wall is at larger x
+        }
+
+        return best;
+    };
+
+    options.edgeMargin = 0.0f;
+    REQUIRE(nav.GetPath(1, TestWorld::MAP_ID, a, b, path, nullptr, &options));
+    REQUIRE(path.pointCount > 10);
+    float ends = 0.0f;
+    const float hugging = closest(ends);
+    CHECK(ends < 1.5f);    // the ends snap to the navmesh, two yards from the wall here
+    CHECK(hugging < 2.5f); // the coarse test navmesh ends about two yards from the wall
+
+    options.edgeMargin = 2.0f;
+    REQUIRE(nav.GetPath(1, TestWorld::MAP_ID, a, b, path, nullptr, &options));
+    REQUIRE(path.pointCount > 10);
+    const float away = closest(ends);
+    CHECK(ends < 1.5f); // the ends snap to the navmesh, two yards from the wall here
+    CHECK(away > hugging + 1.0f);
+
+    // Still a valid path: consecutive points within the spacing, all near the ground.
+    for (int i = 1; i < path.pointCount; ++i)
+    {
+        CHECK(path[i - 1].DistanceTo(path[i]) <= options.waypointSpacing + 2.0f);
+        CHECK(std::fabs(path[i].z) < 1.0f);
+    }
+}
+
+TEST_CASE(Detail_HeightsFromTheStaticWorld)
+{
+    // Flat ground at 0, platform at 5: with DETAIL and the .anw the points sit on the geometry itself, the plain path
+    // keeps the navmesh heights (a little above it).
+    AmeisenNavigation nav = MakeNav(TestWorld::Get().meshDir);
+    REQUIRE(nav.NewClient(1));
+    const Vector3 a = Wow(-700.0f, 0.0f, -50.0f);
+    const Vector3 b = Wow(-400.0f, 0.0f, -50.0f);
+    Path path(512);
+
+    REQUIRE(nav.GetPath(1, TestWorld::MAP_ID, a, b, path));
+    float plainMax = 0.0f;
+
+    for (int i = 0; i < path.pointCount; ++i)
+    {
+        plainMax = std::max(plainMax, std::fabs(path[i].z));
+    }
+
+    PathOptions options;
+    options.detail = true;
+    REQUIRE(nav.GetPath(1, TestWorld::MAP_ID, a, b, path, nullptr, &options));
+    REQUIRE(path.pointCount > 20);
+
+    for (int i = 0; i < path.pointCount; ++i)
+    {
+        CHECK(std::fabs(path[i].z) < 0.02f);
+    }
+
+    CHECK(plainMax > 0.05f); // the navmesh is above the ground, so the test tells the two apart
+
+    // On the platform (the right floor, not the ground 5 yards below).
+    REQUIRE(nav.GetPath(1, TestWorld::MAP_ID, Wow(-445.0f, TestWorld::PLATFORM_Y, -445.0f),
+                        Wow(-405.0f, TestWorld::PLATFORM_Y, -405.0f), path, nullptr, &options));
+    REQUIRE(path.pointCount > 5);
+
+    for (int i = 0; i < path.pointCount; ++i)
+    {
+        CHECK(std::fabs(path[i].z - TestWorld::PLATFORM_Y) < 0.02f);
+    }
+}

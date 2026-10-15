@@ -107,7 +107,7 @@ struct AmeisenNavigationSettings
     MmapNavSource::Patterns customMmapPatterns{};
     std::unordered_map<int, int> parentMaps; // MMAPs: child map id -> parent map id (files fall back to the parent)
     int maxPolyPath = 2048;
-    int maxPointPath = 512;
+    int maxPointPath = 2048;
     int maxSearchNodes = 65535;
     float factionDangerCost = 3.0f;
     float waterCost = 1.6f;     // water and ocean
@@ -165,6 +165,7 @@ struct PathOptions
     bool detail = false;       // dense waypoints on the navmesh surface (see DetailPath)
     float waypointSpacing = 4.0f;      // detail: longest distance between two waypoints
     float waypointHeightError = 0.3f;  // detail: how far the surface may leave the line between two waypoints
+    float edgeMargin = 1.0f;           // detail: keep the added waypoints this far from the navmesh edge (0 = off)
     PathTuning tuning{};
     float bodyRadius = 0.4f;   // body swept by clearBody (static world, game objects included)
     float bodyHeight = 2.0f;
@@ -495,6 +496,15 @@ private:
     /// spacing grows if the path wouldn't fit.
     static void DetailPath(const dtNavMeshQuery* query, const dtQueryFilter* filter, Path& path, unsigned char* flags,
                            const PathOptions& options, unsigned char* info = nullptr) noexcept;
+
+    /// Move a point of the segment previous -> next across the path, away from the navmesh edge beside it (a cliff,
+    /// a wall, a forbidden area), until it is `margin` away or in the middle of the passage when that is narrower.
+    /// False if the point stays.
+    static bool PushFromEdge(const dtNavMeshQuery* query, const dtQueryFilter* filter, const Vector3& point,
+                             const Vector3& previous, const Vector3& next, float margin, Vector3& out) noexcept;
+
+    /// Put the path's heights on the true ground of the static world (the navmesh lies a little above it). RD path.
+    void GroundPoints(int mapId, Path& path) noexcept;
 
     /// Navmesh area under every point (RD path, 0 = none) and POINT_INFO_SURFACE_CHANGE where it changes.
     static void DescribePoints(const dtNavMeshQuery* query, const dtQueryFilter* filter, const Path& path,
