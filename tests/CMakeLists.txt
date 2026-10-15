@@ -17,6 +17,7 @@ add_executable(anav_e2e_tests
     E2EAvoidanceTests.cpp
     E2EObstacleTests.cpp
     E2EIslandTests.cpp
+    E2EWaterTests.cpp
     E2EWorldTests.cpp
     E2EDynamicTests.cpp
     E2EDetailTests.cpp

@@ -44,6 +44,8 @@ void PrintUsage()
         "      --radius <r>        Agent radius, distance kept from walls [0.6]\n"
         "      --height <h>        Agent height, lower ceilings block [2.0]\n"
         "      --slope <deg>       Steepest walkable slope [55]\n"
+        "      --wade-depth <d>    Deepest water walked through, the ground under deeper water is swum over\n"
+        "                          (not walkable), 0 = keep lake and sea beds [1.5]\n"
         "      --jump-height <h>   Highest obstacle jumped over, 0 = no jump links [1.5]\n"
         "      --drop-height <h>   Highest ledge dropped down, 0 = no drop links [10]\n\n"
         "Example: AmeisenNavigation.Exporter -w \"C:\\WoW\" -o \"C:\\meshes\" -m 0,1 -j 8\n");
@@ -203,14 +205,17 @@ bool ParseArguments(int argc, char** argv, CommandLine& cmd, bool& exitEarly)
                 links.maxDropHeight = value;
             }
         }
-        else if ((arg == "--climb" || arg == "--radius" || arg == "--height" || arg == "--slope") && hasValue)
+        else if ((arg == "--climb" || arg == "--radius" || arg == "--height" || arg == "--slope" ||
+                  arg == "--wade-depth") &&
+                 hasValue)
         {
             auto& build = options.buildConfig;
             const std::string_view value = argv[++i];
-            const bool ok = arg == "--climb"    ? ParseFloat(value, build.agentClimb, 0.1f, 5.0f)
-                            : arg == "--radius" ? ParseFloat(value, build.agentRadius, 0.1f, 5.0f)
-                            : arg == "--height" ? ParseFloat(value, build.agentHeight, 0.5f, 10.0f)
-                                                : ParseFloat(value, build.walkableSlopeAngle, 10.0f, 85.0f);
+            const bool ok = arg == "--climb"        ? ParseFloat(value, build.agentClimb, 0.1f, 5.0f)
+                            : arg == "--radius"     ? ParseFloat(value, build.agentRadius, 0.1f, 5.0f)
+                            : arg == "--height"     ? ParseFloat(value, build.agentHeight, 0.5f, 10.0f)
+                            : arg == "--wade-depth" ? ParseFloat(value, build.maxWadeDepth, 0.0f, 50.0f)
+                                                    : ParseFloat(value, build.walkableSlopeAngle, 10.0f, 85.0f);
 
             if (!ok)
             {

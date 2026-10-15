@@ -56,6 +56,11 @@ static world". Re-export to get the `.anw` and `gameobjects.ano` files.
 - DETAIL keeps its waypoints `fEdgeMargin` (1 yard) from the navmesh edge where the passage allows it (middle of the
   passage otherwise): cliffs, docks, forbidden water. With the static world the points take the true ground height.
   Segments along the navmesh edge, where the navmesh raycast stops early, are detailed too (they used to stay plain).
+- Exporter: the ground under water deeper than `--wade-depth` (1.5 yards) isn't walkable any more. Lake and sea
+  beds were walkable islands cut off from the shore: a swimming bot closer to the bed than to the surface was put
+  on it and got no path out of the water (measured: a dive 8 yards down in a 10 yard deep lake, partial path that
+  ended 2.5 yards under water). Shallow water stays walkable water, ground under solid geometry (a tunnel below a
+  lake) is left alone; `--wade-depth 0` keeps the beds. Fewer polygons too (27% on the test lake tile).
 - `iMaxPointPath` defaults to 2048 (was 512): dense paths keep their spacing over 8 km instead of 2.
 - Navmesh islands (`NavMeshIslands`, computed per map at load and after tile rebuilds): a target on another island is
   unreachable without a search, the path goes to the closest point of the start's island near the target in

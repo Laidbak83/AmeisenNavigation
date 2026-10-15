@@ -76,11 +76,15 @@ void ForEachSpan(const rcCompactHeightfield* chf, const RdRect& rect, Fn&& fn)
 }
 } // namespace AreaMarkerDetail
 
-/// Mark spans that lie below the surface of water rects with the rect's liquid area id.
+/// Mark spans that lie below the surface of water rects with the rect's liquid area id, and drop the ones too deep
+/// to stand on (lake and sea beds: characters swim there, a walkable bed would be a disconnected island that catches
+/// every swimming position). Only spans under open water count: the gap above them has to reach the surface, a
+/// tunnel or a cellar under a lake (solid geometry in between) stays as it is.
 ///
 /// Must be called AFTER rcErodeWalkableArea/rcMedianFilterWalkableArea to restore water areas that were cleared by
-/// erosion or the median filter at shores. Returns the number of marked spans.
-inline int MarkWaterAreas(rcCompactHeightfield* chf, const WaterMap* waterMap) noexcept
+/// erosion or the median filter at shores. maxWadeDepth: deepest water still walked through (<= 0 keeps every bed).
+/// Returns the number of marked spans.
+inline int MarkWaterAreas(rcCompactHeightfield* chf, const WaterMap* waterMap, float maxWadeDepth = 0.0f) noexcept
 {
     int marked = 0;
 
@@ -88,21 +92,45 @@ inline int MarkWaterAreas(rcCompactHeightfield* chf, const WaterMap* waterMap) n
         // Use the max water height of the rect's 4 corners + tolerance. The tolerance accounts for cell height
         // quantization (ch ~ 0.2) so spans at the water surface are reliably caught, larger values would mark
         // shoreline terrain as water.
-        const float maxWaterH = rect.MaxHeight() + 0.5f;
+        const float surface = rect.MaxHeight();
+        const float maxWaterH = surface + 0.5f;
 
         AreaMarkerDetail::ForEachSpan(chf, rect, [&](int i, int spanEnd) {
             const unsigned char currentArea = chf->areas[i];
 
-            // Skip spans already marked as liquid and never overwrite structural geometry (bridges, docks,
-            // WMO buildings, doodads) with water, those stay walkable ground even below the water level.
-            if (IsLiquidArea(currentArea) || IsStructureArea(currentArea))
+            if (IsLiquidArea(currentArea) || currentArea == RC_NULL_AREA)
             {
                 return;
             }
 
-            const float spanTop = chf->bmin[1] + chf->spans[i].y * chf->ch;
+            const rcCompactSpan& span = chf->spans[i];
+            const float spanTop = chf->bmin[1] + span.y * chf->ch;
 
             if (spanTop > maxWaterH)
+            {
+                return;
+            }
+
+            // Open water above: the free space reaches the surface (the next solid is the water surface itself, which
+            // starts up to a cell or two below it once rasterized, or something above it; 0xff is the clamped
+            // "nothing above" height).
+            const float gapTop = chf->bmin[1] + (span.y + span.h) * chf->ch;
+
+            if (span.h != 0xff && gapTop < surface - std::max(0.5f, 2.0f * chf->ch))
+            {
+                return; // solid in between: under the lake bed, not in the water
+            }
+
+            // Deep: nobody walks there (structures included, a sunken ship's deck is swum over).
+            if (maxWadeDepth > 0.0f && surface - spanTop > maxWadeDepth)
+            {
+                chf->areas[i] = RC_NULL_AREA;
+                return;
+            }
+
+            // Never overwrite structural geometry (bridges, docks, WMO buildings, doodads) with water, those stay
+            // walkable ground even below the water level.
+            if (IsStructureArea(currentArea))
             {
                 return;
             }

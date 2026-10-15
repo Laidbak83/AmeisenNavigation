@@ -119,6 +119,8 @@ AmeisenNavigation.Exporter --tc-data <folder> --output <mesh folder> [options]  
       --radius <r>     Agent radius, distance kept from walls (default 0.6)
       --height <h>     Agent height, lower ceilings block (default 2.0)
       --slope <deg>    Steepest walkable slope (default 55)
+      --wade-depth <d> Deepest water walked through (default 1.5), the ground under deeper water is swum over,
+                       0 = keep lake and sea beds
       --jump-height <h> Highest obstacle jumped over, 0 = no jump links (default 1.5)
       --drop-height <h> Highest ledge dropped down, 0 = no drop links (default 10)
 ```
@@ -131,7 +133,11 @@ extracts terrain, liquids, WMOs and doodads, and builds one Detour tile per ADT:
 - Triangles are bucketed per tile and sub-tile, so the build time grows linearly with the map size.
 - WMO/doodad placements are extracted once (by unique id) and are never clipped at ADT borders.
 - WMO-only maps (most dungeons and raids) are built from the WDT's global WMO.
-- Liquids come from MH2O (WotLK, sloped surfaces included) with an MCLQ fallback for older data.
+- Liquids come from MH2O (WotLK, sloped surfaces included) with an MCLQ fallback for older data. Shallow water
+  (up to `--wade-depth`, 1.5 yards) is walked through and marked as water; the ground under deeper water (lake and
+  sea beds, sunken decks) isn't walkable, characters swim there: a walkable bed used to be a disconnected island
+  that caught every swimming position (a bot diving 8 yards down got no path out of a lake). Only ground under open
+  water counts, a tunnel or cellar below a lake keeps its navmesh.
 - Tiles that would exceed Detour's 65535 vertex limit are automatically rebuilt with coarser settings.
 - Obstacles: WMO triangles collide like in the client (collision flag, or rendered and not a detail), M2 collision
   meshes are read for every model version (vanilla/TBC headers, WotLK, chunked MD21). The default climb (1.0 yard)

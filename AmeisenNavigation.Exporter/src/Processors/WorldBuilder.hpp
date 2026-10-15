@@ -82,7 +82,8 @@ inline std::optional<BuildInfo> DeserializeBuild(const std::vector<unsigned char
     std::memcpy(&info.params, bytes.data() + 4 + sizeof(sizes) + sizeof(info.config), sizeof(info.params));
 
     if (!ValidateNavMeshParams(info.params) || info.config.meshResolution < 16 || info.config.meshResolution > 16384 ||
-        !(info.config.agentRadius >= 0.0f) || !(info.config.agentHeight > 0.0f) || !(info.config.agentClimb >= 0.0f))
+        !(info.config.agentRadius >= 0.0f) || !(info.config.agentHeight > 0.0f) || !(info.config.agentClimb >= 0.0f) ||
+        !(info.config.maxWadeDepth >= 0.0f && info.config.maxWadeDepth <= 1000.0f))
     {
         return std::nullopt;
     }

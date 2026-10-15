@@ -73,6 +73,7 @@ struct TileBuildConfig
     float agentHeight = 2.0f;
     float agentRadius = 0.6f;
     float agentClimb = 1.0f; // highest step walked up without jumping (obstacles from climb + 1 cell height block)
+    float maxWadeDepth = 1.5f;       // deeper water is swum: the ground under it isn't walkable (0 = keep every bed)
     int minRegionSize = 10;          // in cells (squared for the area)
     int mergeRegionSize = 25;        // in cells (squared for the area)
     float maxEdgeLength = 12.0f;     // world units
@@ -877,7 +878,7 @@ private:
 
         // Water first (restores shores cleared by erosion), roads before cities (roads in cities stay roads),
         // factions last (all base ids final).
-        MarkWaterAreas(chf, waterMap);
+        MarkWaterAreas(chf, waterMap, Config.maxWadeDepth);
         MarkRoadAreas(chf, roadMap);
         MarkCityAreas(chf, cityMap);
         MarkFactionAreas(chf, factionMap);

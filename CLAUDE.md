@@ -93,7 +93,8 @@ tile coordinates) before `dtNavMesh::addTile` — Detour itself trusts tile data
 Default filters per `ClientState` come from `IQueryFilterProvider`; `CONFIGURE_FILTER` overrides costs per client.
 
 **Exporter pipeline.** MPQs in client load order (`FileSort.hpp`) → `CachedFileReader` → per ADT
-`AdtChunkExtractor` (terrain, MH2O/MCLQ liquids, roads from textures, city/faction areas from AreaTable, WMO/M2
+`AdtChunkExtractor` (terrain, MH2O/MCLQ liquids (`MarkWaterAreas`: beds under open water deeper than
+`maxWadeDepth` become unwalkable), roads from textures, city/faction areas from AreaTable, WMO/M2
 placements deduplicated by uniqueId, never clipped) → `Structure::Clean` (drops garbage geometry) →
 `AdtTileProcessor` (one Detour tile per ADT, triangles bucketed per tile and sub-tile, Recast per sub-tile, merged,
 rebuilt coarser when Detour's 65535 vertex limit is hit) → `AnpWriter`. The Detour tile grid is aligned to the ADT

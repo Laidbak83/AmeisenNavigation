@@ -493,9 +493,10 @@ TEST_CASE(Exporter_Mh2oWaterSurfaceFromPatch)
         CHECK_EQ(AreaAt(CONTINENT, {x, y, expected + CH}), LIQUID_OCEAN);
     }
 
-    // The sea floor below is still there.
+    // The sea floor 12 yards below is swum over, not walked (--wade-depth): asked from just above it, the nearest
+    // navmesh is the surface.
     const float ground = TerrainHeight(WATER.x, WATER.y);
-    CHECK(OnSurface(HeightAt(CONTINENT, WATER.x, WATER.y, ground + 0.5f), ground));
+    CHECK(OnSurface(HeightAt(CONTINENT, WATER.x, WATER.y, ground + 0.5f), WaterHeight(WATER.x, WATER.y)));
 }
 
 TEST_CASE(Exporter_TerrainHolesHaveNoMesh)
