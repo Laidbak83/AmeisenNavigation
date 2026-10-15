@@ -105,7 +105,7 @@ var ex = nav.GetPathEx(map, deck, ground);
 Check(ex != null && !ex.IsPartial && ex.Flags[0].HasFlag(PathPointFlags.Start) && ex.Flags[^1].HasFlag(PathPointFlags.End)
       && ex.Flags.Count(f => f.HasFlag(PathPointFlags.Drop)) == 1, $"GetPathEx drop {ex?.Points.Length}");
 var exUp = nav.GetPathEx(map, ground, deck);
-Check(exUp is { IsPartial: true }, "GetPathEx partial");
+Check(exUp is { IsPartial: true, IsUnreachable: true, HitSearchLimit: false }, "GetPathEx partial, unreachable");
 Check(nav.GetPathEx(map, ground, deck, PathFlags.RequireComplete) == null, "GetPathEx RequireComplete -> null");
 
 // Avoid zones: a zone in the open, gone around.

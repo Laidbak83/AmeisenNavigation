@@ -895,7 +895,8 @@ namespace AmeisenNavigation.Client
                     info[i] = (PathPointInfo)infoBytes[i];
             }
 
-            return new PathResult(points, flags, (header.ResultFlags & 1) != 0, areas, info);
+            return new PathResult(points, flags, (header.ResultFlags & 1) != 0, areas, info,
+                                  (header.ResultFlags & 4) != 0, (header.ResultFlags & 8) != 0);
         }
 
         private bool SendAvoidZonesInternal(int mapId, AvoidZone[] zones)

@@ -224,6 +224,7 @@
     <ClInclude Include="src\NavSources\OffMesh\OffMeshLinks.hpp" />
     <ClInclude Include="src\World\StaticWorld.hpp" />
     <ClInclude Include="src\NavSources\NavMeshLock.hpp" />
+    <ClInclude Include="src\NavSources\NavMeshIslands.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />

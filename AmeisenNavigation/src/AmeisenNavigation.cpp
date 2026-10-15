@@ -185,7 +185,7 @@ bool AmeisenNavigation::PreloadMap(int mapId) noexcept
 
 bool AmeisenNavigation::GetPath(size_t clientId, int mapId, const Vector3& startPosition, const Vector3& endPosition,
                                 Path& path, bool* partial, const PathOptions* options, unsigned char* pointFlags,
-                                unsigned char* pointInfo, unsigned char* pointAreas)
+                                unsigned char* pointInfo, unsigned char* pointAreas, PathPartialReason* reason)
 {
     path.Clear();
     const auto ctx = GetQueryContext(clientId, mapId);
@@ -199,12 +199,11 @@ bool AmeisenNavigation::GetPath(size_t clientId, int mapId, const Vector3& start
 
     dtPolyRef* refs = ctx.client->GetStraightPathRefBuffer();
     unsigned char* flags = ctx.client->GetStraightPathFlagBuffer();
-    const bool found =
-        options && options->follow
-            ? CalculateFollowPath(ctx.query, ctx.filter, *ctx.client, mapId, startPosition, endPosition, path,
-                                  partial, refs, flags)
-            : CalculateNormalPath(ctx.query, ctx.filter, *ctx.client, startPosition, endPosition, path, refs, partial,
-                                  flags);
+    const bool found = options && options->follow
+                           ? CalculateFollowPath(ctx.query, ctx.filter, *ctx.client, mapId, startPosition, endPosition,
+                                                 path, partial, refs, flags, ctx.islands.get(), reason)
+                           : CalculateNormalPath(ctx.query, ctx.filter, *ctx.client, startPosition, endPosition, path,
+                                                 refs, partial, flags, ctx.islands.get(), reason);
 
     if (!found)
     {
@@ -249,7 +248,7 @@ bool AmeisenNavigation::GetPath(size_t clientId, int mapId, const Vector3& start
 bool AmeisenNavigation::GetRandomPath(size_t clientId, int mapId, const Vector3& startPosition,
                                       const Vector3& endPosition, Path& path, float maxRandomDistance, bool* partial,
                                       const PathOptions* options, unsigned char* pointFlags, unsigned char* pointInfo,
-                                      unsigned char* pointAreas)
+                                      unsigned char* pointAreas, PathPartialReason* reason)
 {
     path.Clear();
     const auto ctx = GetQueryContext(clientId, mapId);
@@ -266,8 +265,8 @@ bool AmeisenNavigation::GetRandomPath(size_t clientId, int mapId, const Vector3&
     dtPolyRef* cornerRefs = ctx.client->GetStraightPathRefBuffer();
     unsigned char* flags = ctx.client->GetStraightPathFlagBuffer();
 
-    if (!CalculateNormalPath(ctx.query, ctx.filter, *ctx.client, startPosition, endPosition, path, cornerRefs,
-                             partial, flags))
+    if (!CalculateNormalPath(ctx.query, ctx.filter, *ctx.client, startPosition, endPosition, path, cornerRefs, partial,
+                             flags, ctx.islands.get(), reason))
     {
         return false;
     }
@@ -758,6 +757,56 @@ bool AmeisenNavigation::Raycast(const dtNavMeshQuery* query, const dtQueryFilter
     return cast;
 }
 
+bool AmeisenNavigation::ClosestReachable(const dtNavMeshQuery* query, const dtQueryFilter* filter,
+                                         const NavMeshIslands& islands, uint32_t island, const Vector3& rdTarget,
+                                         PolyPosition& out) noexcept
+{
+    constexpr int MAX_POLYS = 256;
+    dtPolyRef polys[MAX_POLYS];
+
+    for (const float radius : {10.0f, 30.0f, 90.0f})
+    {
+        const float extents[3]{radius, 50.0f, radius};
+        int count = 0;
+
+        if (dtStatusFailed(query->queryPolygons(rdTarget, extents, filter, polys, &count, MAX_POLYS)))
+        {
+            continue;
+        }
+
+        float best = FLT_MAX;
+        bool found = false;
+
+        for (int i = 0; i < count; ++i)
+        {
+            Vector3 closest;
+
+            if (islands.Of(polys[i]) != island ||
+                dtStatusFailed(query->closestPointOnPoly(polys[i], rdTarget, closest, nullptr)))
+            {
+                continue;
+            }
+
+            const float distance = dtVdistSqr(closest, rdTarget);
+
+            if (distance < best)
+            {
+                best = distance;
+                out.poly = polys[i];
+                out.pos = closest;
+                found = true;
+            }
+        }
+
+        if (found)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 bool AmeisenNavigation::PostProcessClosestPointOnPoly(size_t clientId, int mapId, const Path& input, Path& output)
 {
     output.Clear();
@@ -1080,6 +1129,7 @@ AmeisenNavigation::QueryContext AmeisenNavigation::GetQueryContext(size_t client
     }
 
     ctx.meshLock = NavMeshLock::Shared(pool->Lock());
+    ctx.islands = pool->GetIslands();
     ctx.lease = pool->Acquire();
 
     if (!ctx.lease)
@@ -1112,15 +1162,47 @@ NavMeshQueryPool* AmeisenNavigation::GetQueryPool(int mapId)
         return nullptr;
     }
 
+    // The islands are computed before the pool exists (no request can see the navmesh yet), outside the pool lock.
+    std::shared_ptr<const NavMeshIslands> islands;
+
+    {
+        std::shared_lock lock(QueryPoolsMutex);
+
+        if (!QueryPools.contains(mapId))
+        {
+            islands = ComputeIslands(mapId, *navMesh);
+        }
+    }
+
     std::unique_lock lock(QueryPoolsMutex);
     auto& pool = QueryPools[mapId];
 
     if (!pool)
     {
         pool = std::make_unique<NavMeshQueryPool>(navMesh, Settings.maxSearchNodes, Settings.maxIdleQueriesPerMap);
+        pool->SetIslands(std::move(islands));
     }
 
     return pool.get();
+}
+
+std::shared_ptr<const NavMeshIslands> AmeisenNavigation::ComputeIslands(int mapId, const dtNavMesh& navMesh) noexcept
+{
+    try
+    {
+        const auto start = std::chrono::steady_clock::now();
+        auto islands = std::make_shared<const NavMeshIslands>(navMesh);
+        const auto ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+        LogI("Map ", mapId, ": ", islands->PolyCount(), " polygons in ", islands->Count(), " islands (largest ",
+             islands->LargestSize(), ") in ", ms, "ms");
+        return islands;
+    }
+    catch (...)
+    {
+        LogE("Map ", mapId, ": computing the navmesh islands failed, unreachable targets are searched");
+        return nullptr;
+    }
 }
 
 size_t AmeisenNavigation::GetQueryCount(int mapId) const
@@ -1133,7 +1215,8 @@ size_t AmeisenNavigation::GetQueryCount(int mapId) const
 bool AmeisenNavigation::CalculateNormalPath(dtNavMeshQuery* query, const dtQueryFilter* filter,
                                             AmeisenNavClient& client, const Vector3& startPosition,
                                             const Vector3& endPosition, Path& path, dtPolyRef* straightPathRefs,
-                                            bool* partial, unsigned char* straightPathFlags) noexcept
+                                            bool* partial, unsigned char* straightPathFlags,
+                                            const NavMeshIslands* islands, PathPartialReason* reason) noexcept
 {
     path.Clear();
 
@@ -1157,19 +1240,48 @@ bool AmeisenNavigation::CalculateNormalPath(dtNavMeshQuery* query, const dtQuery
         return false;
     }
 
-    return CalculateNormalPath(query, filter, client, start, end, path, straightPathRefs, partial, straightPathFlags);
+    return CalculateNormalPath(query, filter, client, start, end, path, straightPathRefs, partial, straightPathFlags,
+                               islands, reason);
 }
 
 bool AmeisenNavigation::CalculateNormalPath(dtNavMeshQuery* query, const dtQueryFilter* filter,
                                             AmeisenNavClient& client, const PolyPosition& start,
-                                            const PolyPosition& end, Path& path, dtPolyRef* straightPathRefs,
-                                            bool* partial, unsigned char* straightPathFlags) noexcept
+                                            const PolyPosition& target, Path& path, dtPolyRef* straightPathRefs,
+                                            bool* partial, unsigned char* straightPathFlags,
+                                            const NavMeshIslands* islands, PathPartialReason* reason) noexcept
 {
     path.Clear();
 
     if (partial)
     {
         *partial = false;
+    }
+
+    if (reason)
+    {
+        *reason = PathPartialReason::NONE;
+    }
+
+    // Another island: no search can reach the target, go to the closest point of the start's island instead (the
+    // full search would only burn its node budget to find a worse one).
+    PolyPosition end = target;
+    bool unreachable = false;
+
+    if (islands)
+    {
+        const uint32_t from = islands->Of(start.poly);
+        const uint32_t to = islands->Of(end.poly);
+
+        if (from && to && from != to)
+        {
+            unreachable = true;
+            PolyPosition reachable;
+
+            if (ClosestReachable(query, filter, *islands, from, target.pos, reachable))
+            {
+                end = reachable;
+            }
+        }
     }
 
     dtPolyRef* polyPath = client.GetPolyPathBuffer();
@@ -1196,10 +1308,19 @@ bool AmeisenNavigation::CalculateNormalPath(dtNavMeshQuery* query, const dtQuery
     if (polyPath[polyPathCount - 1] != end.poly)
     {
         query->closestPointOnPoly(polyPath[polyPathCount - 1], end.pos, endPos, nullptr);
+    }
 
+    if (polyPath[polyPathCount - 1] != end.poly || unreachable)
+    {
         if (partial)
         {
             *partial = true;
+        }
+
+        if (reason)
+        {
+            *reason = !unreachable && dtStatusDetail(polyPathStatus, DT_OUT_OF_NODES) ? PathPartialReason::SEARCH_LIMIT
+                                                                                      : PathPartialReason::UNREACHABLE;
         }
     }
 
@@ -1330,6 +1451,11 @@ int AmeisenNavigation::ReplaceTiles(int mapId, const std::vector<std::vector<uns
         {
             TileRebuilder::Rebuild(*navMesh, navMesh->getTileAt(header.x, header.y, header.layer), links);
         }
+    }
+
+    if (replaced > 0 && pool->GetIslands())
+    {
+        pool->SetIslands(ComputeIslands(mapId, *navMesh));
     }
 
     return replaced;

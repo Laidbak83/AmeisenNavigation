@@ -86,7 +86,8 @@ published to `StaticWorld::SetDynamicMeshes`, dirty ADTs rebuilt on a worker thr
 **Nav sources.** `AnpNavSource` (own format: zip with `mapId`, `params` and one Detour tile per `XX_YY` entry) and
 `MmapNavSource` (TrinityCore/SkyFire `.mmap`/`.mmtile`, format detected from file names, TrinityCore master's MMAP v16
 from the magic in front of the `.mmap`; child maps can fall back to their parent's files). Maps load lazily once
-(`NavMeshCache`). Every tile goes through `ValidateTileData` (all indices, finite coordinates, BV quantization range,
+(`NavMeshCache`); `NavMeshIslands` (connected parts, in the map's `NavMeshQueryPool`, recomputed by `ReplaceTiles`)
+makes targets on another island fail fast with `PathPartialReason`. Every tile goes through `ValidateTileData` (all indices, finite coordinates, BV quantization range,
 tile coordinates) before `dtNavMesh::addTile` — Detour itself trusts tile data completely. ANP area ids
 (`AnpFormat.hpp`) come in {neutral, Alliance, Horde} triplets and are wire/file format: never renumber them.
 Default filters per `ClientState` come from `IQueryFilterProvider`; `CONFIGURE_FILTER` overrides costs per client.

@@ -1088,12 +1088,13 @@ void NavServer::HandlePathEx(ClientHandler* handler, AnTcpMessageType type, cons
     unsigned char* infoPtr = surfaceInfo ? info.data() : nullptr;
     unsigned char* areasPtr = surfaceInfo ? areas.data() : nullptr;
     bool partial = false;
+    PathPartialReason reason = PathPartialReason::NONE;
 
     bool ok = randomize ? Navigation->GetRandomPath(handler->GetId(), request.mapId, request.start, request.end, path,
                                                     Cfg.randomPathMaxDistance, &partial, &options, flags.data(),
-                                                    infoPtr, areasPtr)
+                                                    infoPtr, areasPtr, &reason)
                         : Navigation->GetPath(handler->GetId(), request.mapId, request.start, request.end, path,
-                                              &partial, &options, flags.data(), infoPtr, areasPtr);
+                                              &partial, &options, flags.data(), infoPtr, areasPtr, &reason);
 
     if (ok && partial && HasFlag(request.flags, PathRequestFlags::REQUIRE_COMPLETE))
     {
@@ -1127,8 +1128,18 @@ void NavServer::HandlePathEx(ClientHandler* handler, AnTcpMessageType type, cons
     // Legacy smoothing moved the points: their areas and info are unknown.
     const bool withInfo = surfaceInfo && result == &path;
     const auto count = static_cast<size_t>(result->pointCount);
-    const PathExResponseHeader header{result->pointCount,
-                                      (partial ? PATH_RESULT_PARTIAL : 0) | (withInfo ? PATH_RESULT_SURFACE_INFO : 0)};
+    int resultFlags = (partial ? PATH_RESULT_PARTIAL : 0) | (withInfo ? PATH_RESULT_SURFACE_INFO : 0);
+
+    if (partial && reason == PathPartialReason::UNREACHABLE)
+    {
+        resultFlags |= PATH_RESULT_UNREACHABLE;
+    }
+    else if (partial && reason == PathPartialReason::SEARCH_LIMIT)
+    {
+        resultFlags |= PATH_RESULT_SEARCH_LIMIT;
+    }
+
+    const PathExResponseHeader header{result->pointCount, resultFlags};
     std::vector<char> buffer(sizeof(header) + count * (sizeof(Vector3) + (withInfo ? 3 : 1)));
     char* out = buffer.data();
     std::memcpy(out, &header, sizeof(header));

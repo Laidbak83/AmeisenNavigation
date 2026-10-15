@@ -57,6 +57,11 @@ static world". Re-export to get the `.anw` and `gameobjects.ano` files.
   passage otherwise): cliffs, docks, forbidden water. With the static world the points take the true ground height.
   Segments along the navmesh edge, where the navmesh raycast stops early, are detailed too (they used to stay plain).
 - `iMaxPointPath` defaults to 2048 (was 512): dense paths keep their spacing over 8 km instead of 2.
+- Navmesh islands (`NavMeshIslands`, computed per map at load and after tile rebuilds): a target on another island is
+  unreachable without a search, the path goes to the closest point of the start's island near the target in
+  microseconds instead of a search that burns its whole node budget (measured: 38 µs vs 13.8 ms for a 200 yard
+  request). PATH_EX result flags `4` UNREACHABLE and `8` SEARCH_LIMIT say why a path is partial; C#:
+  `PathResult.IsUnreachable` / `HitSearchLimit`.
 
 ### Fixed
 

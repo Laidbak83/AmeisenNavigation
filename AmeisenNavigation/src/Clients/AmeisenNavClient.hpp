@@ -31,6 +31,7 @@ struct FollowState
 {
     int mapId = -1; // -1 = no corridor
     bool partial = false;
+    unsigned char reason = 0; // PathPartialReason of the corridor's search
     dtPathCorridor corridor;
 };
 

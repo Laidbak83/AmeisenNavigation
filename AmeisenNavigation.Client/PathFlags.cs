@@ -146,10 +146,16 @@ namespace AmeisenNavigation.Client
     /// <param name="Points">Path points (WoW coordinates).</param>
     /// <param name="Flags">One entry per point.</param>
     /// <param name="IsPartial">The end isn't reachable, the path leads as close as possible.</param>
+    /// <param name="IsUnreachable">Partial because no path exists (the target is on another part of the navmesh, or
+    /// behind what the filter forbids): asking again won't help, pick another target or get closer some other way
+    /// (server 1.12+).</param>
+    /// <param name="HitSearchLimit">Partial because the search ran out of nodes (too far or too winding): the path
+    /// leads towards the target, follow it and ask again from further on (server 1.12+).</param>
     /// <param name="Areas"><see cref="PathFlags.SurfaceInfo"/>: navmesh area id under every point (0 = none), null
     /// if not requested or the path was smoothed with Chaikin / Catmull-Rom / Bezier.</param>
     /// <param name="Info"><see cref="PathFlags.SurfaceInfo"/>: what the ground does at every point, null like
     /// <paramref name="Areas"/>.</param>
     public sealed record PathResult(Vector3[] Points, PathPointFlags[] Flags, bool IsPartial, byte[]? Areas = null,
-                                    PathPointInfo[]? Info = null);
+                                    PathPointInfo[]? Info = null, bool IsUnreachable = false,
+                                    bool HitSearchLimit = false);
 }

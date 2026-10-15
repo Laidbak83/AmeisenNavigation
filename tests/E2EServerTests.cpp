@@ -480,7 +480,7 @@ TEST_CASE(Server_PathExReportsPointFlags)
     auto response = client.Request(MessageType::PATH_EX, request);
     REQUIRE(response.has_value());
     parse(*response, header, points, flags);
-    CHECK_EQ(header.resultFlags, static_cast<int>(PATH_RESULT_PARTIAL));
+    CHECK_EQ(header.resultFlags, static_cast<int>(PATH_RESULT_PARTIAL) | static_cast<int>(PATH_RESULT_UNREACHABLE));
 
     request.flags = static_cast<int>(PathRequestFlags::REQUIRE_COMPLETE);
     response = client.Request(MessageType::PATH_EX, request);

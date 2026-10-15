@@ -5,6 +5,7 @@
 #include <memory>
 #include <mutex>
 
+#include "NavMeshIslands.hpp"
 #include "NavMeshLock.hpp"
 #include <thread>
 #include <vector>
@@ -28,6 +29,7 @@ class NavMeshQueryPool
     std::vector<NavMeshQueryPtr> Idle;
     NavMeshLock MeshLock;
     std::atomic<size_t> Created{0};
+    std::shared_ptr<const NavMeshIslands> Islands; // set under the exclusive mesh lock, read under the shared one
 
     /// Hands a leased query back to its pool.
     struct Returner
@@ -50,6 +52,11 @@ public:
 
     /// Requests hold it shared while they use the navmesh, replacing tiles holds it exclusively.
     NavMeshLock& Lock() noexcept { return MeshLock; }
+
+    /// The navmesh's islands (nullptr until computed). Set while holding the mesh lock exclusively (or before any
+    /// request can see the pool), read while holding it shared.
+    std::shared_ptr<const NavMeshIslands> GetIslands() const noexcept { return Islands; }
+    void SetIslands(std::shared_ptr<const NavMeshIslands> islands) noexcept { Islands = std::move(islands); }
 
     NavMeshQueryPool(const NavMeshQueryPool&) = delete;
     NavMeshQueryPool& operator=(const NavMeshQueryPool&) = delete;

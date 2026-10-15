@@ -201,6 +201,14 @@ enum PathPointFlags : unsigned char
     PATH_POINT_BLOCKED = 1 << 7, // clearBody: the body runs into something on the way to the next point (jump?)
 };
 
+/// Why a path is partial (its end isn't the requested target).
+enum class PathPartialReason : unsigned char
+{
+    NONE = 0,
+    UNREACHABLE,  // no path exists: the target is on another part of the navmesh, or behind what the filter forbids
+    SEARCH_LIMIT, // the search ran out of nodes (too far or too winding): the path leads towards the target
+};
+
 /// What the ground does at a path point (PATH_EX with SURFACE_INFO).
 enum PathPointInfo : unsigned char
 {
@@ -281,16 +289,17 @@ public:
     /// If the end isn't reachable the path leads as close as possible and *partial is set to true.
     /// pointFlags (optional, path.maxSize entries) receives the PathPointFlags of every point.
     /// pointInfo / pointAreas (optional, path.maxSize entries each) receive the PathPointInfo and the navmesh area of
-    /// every point.
+    /// every point. reason (optional) says why the path is partial.
     bool GetPath(size_t clientId, int mapId, const Vector3& startPosition, const Vector3& endPosition, Path& path,
                  bool* partial = nullptr, const PathOptions* options = nullptr, unsigned char* pointFlags = nullptr,
-                 unsigned char* pointInfo = nullptr, unsigned char* pointAreas = nullptr);
+                 unsigned char* pointInfo = nullptr, unsigned char* pointAreas = nullptr,
+                 PathPartialReason* reason = nullptr);
 
     /// Find a path with randomized intermediate waypoints (within maxRandomDistance).
-    bool GetRandomPath(size_t clientId, int mapId, const Vector3& startPosition, const Vector3& endPosition,
-                       Path& path, float maxRandomDistance, bool* partial = nullptr,
-                       const PathOptions* options = nullptr, unsigned char* pointFlags = nullptr,
-                       unsigned char* pointInfo = nullptr, unsigned char* pointAreas = nullptr);
+    bool GetRandomPath(size_t clientId, int mapId, const Vector3& startPosition, const Vector3& endPosition, Path& path,
+                       float maxRandomDistance, bool* partial = nullptr, const PathOptions* options = nullptr,
+                       unsigned char* pointFlags = nullptr, unsigned char* pointInfo = nullptr,
+                       unsigned char* pointAreas = nullptr, PathPartialReason* reason = nullptr);
 
     /// Route that explores an area: waypoints on a hexagonal grid (`spacing` apart) inside the polygon
     /// (WoW x/y outline, the outline's z picks the floor), snapped to the navmesh, visited in a short tour
@@ -375,6 +384,7 @@ private:
         NavMeshQueryPool::Lease lease;
         dtNavMeshQuery* query = nullptr;
         const dtQueryFilter* filter = nullptr;
+        std::shared_ptr<const NavMeshIslands> islands; // may be null
 
         explicit operator bool() const noexcept { return client && query && filter; }
     };
@@ -384,6 +394,15 @@ private:
     /// The map's query pool, nullptr if the map has no navmesh.
     NavMeshQueryPool* GetQueryPool(int mapId);
 
+public:
+    /// The map's navmesh islands (loads the map), nullptr if it has no navmesh or they couldn't be computed.
+    std::shared_ptr<const NavMeshIslands> GetIslands(int mapId)
+    {
+        NavMeshQueryPool* pool = GetQueryPool(mapId);
+        return pool ? pool->GetIslands() : nullptr;
+    }
+
+private:
     /// Every position that reaches Detour goes through here or ToValidRdCoords first.
     static bool FindNearestPoly(const dtNavMeshQuery* query, const dtQueryFilter* filter, const Vector3& rdPosition,
                                 PolyPosition& result, const float* extents = NEAREST_POLY_EXTENTS) noexcept
@@ -451,13 +470,24 @@ private:
     bool CalculateNormalPath(dtNavMeshQuery* query, const dtQueryFilter* filter, AmeisenNavClient& client,
                              const Vector3& startPosition, const Vector3& endPosition, Path& path,
                              dtPolyRef* straightPathRefs = nullptr, bool* partial = nullptr,
-                             unsigned char* straightPathFlags = nullptr) noexcept;
+                             unsigned char* straightPathFlags = nullptr, const NavMeshIslands* islands = nullptr,
+                             PathPartialReason* reason = nullptr) noexcept;
 
-    /// Same for positions already on the navmesh.
+    /// Same for positions already on the navmesh. With the navmesh's islands a target on another island is known
+    /// to be unreachable without a search: the path leads to the closest point of the start's island instead.
     bool CalculateNormalPath(dtNavMeshQuery* query, const dtQueryFilter* filter, AmeisenNavClient& client,
                              const PolyPosition& start, const PolyPosition& end, Path& path,
                              dtPolyRef* straightPathRefs = nullptr, bool* partial = nullptr,
-                             unsigned char* straightPathFlags = nullptr) noexcept;
+                             unsigned char* straightPathFlags = nullptr, const NavMeshIslands* islands = nullptr,
+                             PathPartialReason* reason = nullptr) noexcept;
+
+    /// Islands of a loaded navmesh (nullptr if it failed), logged.
+    static std::shared_ptr<const NavMeshIslands> ComputeIslands(int mapId, const dtNavMesh& navMesh) noexcept;
+
+    /// Closest point to rdTarget on the given island (searched in growing boxes around the target, up to 90 yards).
+    static bool ClosestReachable(const dtNavMeshQuery* query, const dtQueryFilter* filter,
+                                 const NavMeshIslands& islands, uint32_t island, const Vector3& rdTarget,
+                                 PolyPosition& out) noexcept;
 
     /// Detour straight path flags + corner refs -> PathPointFlags (in place allowed: out may be detourFlags).
     static void ToPointFlags(const dtNavMeshQuery* query, const unsigned char* detourFlags, const dtPolyRef* refs,
@@ -473,7 +503,8 @@ private:
     /// Path along the client's follow corridor (reused if the start and target moved little, searched otherwise).
     bool CalculateFollowPath(dtNavMeshQuery* query, const dtQueryFilter* filter, AmeisenNavClient& client, int mapId,
                              const Vector3& startPosition, const Vector3& endPosition, Path& path, bool* partial,
-                             dtPolyRef* straightPathRefs, unsigned char* straightPathFlags) noexcept;
+                             dtPolyRef* straightPathRefs, unsigned char* straightPathFlags,
+                             const NavMeshIslands* islands = nullptr, PathPartialReason* reason = nullptr) noexcept;
 
     /// Apply the options to a path without off-mesh connections. target (RD) is the requested end (stop distance).
     void RefinePath(dtNavMeshQuery* query, const dtQueryFilter* filter, Path& path, const Vector3& target,

@@ -263,7 +263,7 @@ request gets exactly one response with the same type. Positions are WoW coordina
 | `11` SET_AVOID_ZONES | `int mapId, int count, {Vector3 center, float radius, float cost}[count]` (count 0 = none) | `bool` |
 | `12` STEER | `int mapId, Vector3 position, Vector3 velocity, Vector3 target, float maxSpeed, float radius, float deltaTime, int count, {Vector3 position, Vector3 velocity, float radius}[count]` | `int ok, Vector3 velocity, Vector3 position` |
 | `13` REPORT_STUCK | `int mapId, Vector3 position, float radius` (`<= 0` = default) | `bool` |
-| `14` PATH_EX | same as PATH | `int count, int resultFlags (1 = partial, 2 = surface info), Vector3 points[count], uint8 pointFlags[count]` + with result flag `2`: `uint8 areas[count], uint8 pointInfo[count]` (count 0 on failure) |
+| `14` PATH_EX | same as PATH | `int count, int resultFlags (1 = partial, 2 = surface info, 4 = unreachable, 8 = search limit), Vector3 points[count], uint8 pointFlags[count]` + with result flag `2`: `uint8 areas[count], uint8 pointInfo[count]` (count 0 on failure) |
 | `15` LINE_OF_SIGHT | `int mapId, int ignore, Vector3 start, Vector3 end` | `int result (1 hit, 0 clear, -1 no static world), float t, Vector3 position, Vector3 normal, uint32 source, int area` |
 | `16` SURFACES | `int mapId, int ignore, float x, float y, float zTop, float zBottom` | `int count (-1 no static world), uint32 areaId, {float z, Vector3 normal, uint32 source, uint8 area, uint8 flags, uint16}[count]` |
 | `17` SWEEP | `int mapId, int ignore, Vector3 start, Vector3 end, float radius, float height, float stepHeight` | same as LINE_OF_SIGHT, `position` = where the body stops |
@@ -308,6 +308,15 @@ drop instead of on the eroded edge (the ground changes stay exactly where the gr
 (`.anw`) every point's height is the true ground's instead of the navmesh's, which lies a little above it. A path
 that wouldn't fit `iMaxPointPath` gets a larger spacing (the bends and ground changes stay). Optional trailer after the
 tuning trailer: `float spacing, float heightError` (`<= 0` = defaults).
+
+**Unreachable targets**: when a map loads, the server labels the connected parts ("islands") of its navmesh
+(4 bytes per polygon, done again when game objects rebuild tiles). A target on another island (a roof, the inside of a
+closed building, a rock in the sea) is known to be unreachable without a search: the path leads to the closest point of
+the start's island near the target (searched up to 90 yards around it) instead of the best polygon a search that
+exhausts its node budget happens to end on, and it takes microseconds instead of the ~14 ms such a search costs. PATH_EX
+tells partial paths apart: result flag `4` unreachable (no path exists, for this filter or at all: asking again won't
+help), `8` search limit (`iMaxSearchNodes` ran out, the path leads towards the target: follow it and ask again from
+further on). The load log reports the islands per map, many small ones point at navmesh problems.
 
 **Surface info** (`8192`, PATH_EX): the response also carries, per point, the navmesh area under it (ANP area id, 0 =
 none) and what the ground does there: `1` the ground changes after this point (water, road, building floor, faction

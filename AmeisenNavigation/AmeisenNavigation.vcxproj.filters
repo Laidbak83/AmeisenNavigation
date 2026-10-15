@@ -31,6 +31,7 @@
     <ClInclude Include="src\NavSources\OffMesh\OffMeshLinks.hpp" />
     <ClInclude Include="src\World\StaticWorld.hpp" />
     <ClInclude Include="src\NavSources\NavMeshLock.hpp" />
+    <ClInclude Include="src\NavSources\NavMeshIslands.hpp" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\AmeisenNavigation.cpp" />

@@ -414,7 +414,8 @@ void AmeisenNavigation::RefinePath(dtNavMeshQuery* query, const dtQueryFilter* f
 bool AmeisenNavigation::CalculateFollowPath(dtNavMeshQuery* query, const dtQueryFilter* filter,
                                             AmeisenNavClient& client, int mapId, const Vector3& startPosition,
                                             const Vector3& endPosition, Path& path, bool* partial,
-                                            dtPolyRef* straightPathRefs, unsigned char* straightPathFlags) noexcept
+                                            dtPolyRef* straightPathRefs, unsigned char* straightPathFlags,
+                                            const NavMeshIslands* islands, PathPartialReason* reason) noexcept
 {
     path.Clear();
     FollowState* state = client.GetFollowState();
@@ -422,7 +423,7 @@ bool AmeisenNavigation::CalculateFollowPath(dtNavMeshQuery* query, const dtQuery
     if (!state)
     {
         return CalculateNormalPath(query, filter, client, startPosition, endPosition, path, straightPathRefs, partial,
-                                   straightPathFlags);
+                                   straightPathFlags, islands, reason);
     }
 
     Vector3 rdStart;
@@ -462,6 +463,26 @@ bool AmeisenNavigation::CalculateFollowPath(dtNavMeshQuery* query, const dtQuery
             return false;
         }
 
+        // Another island: aim at the closest point of the start's island (see CalculateNormalPath).
+        bool unreachable = false;
+
+        if (islands)
+        {
+            const uint32_t from = islands->Of(start.poly);
+            const uint32_t to = islands->Of(end.poly);
+            PolyPosition reachable;
+
+            if (from && to && from != to)
+            {
+                unreachable = true;
+
+                if (ClosestReachable(query, filter, *islands, from, end.pos, reachable))
+                {
+                    end = reachable;
+                }
+            }
+        }
+
         dtPolyRef* polys = client.GetPolyPathBuffer();
         int polyCount = 0;
         const dtStatus status = query->findPath(start.poly, end.poly, start.pos, end.pos, filter, polys, &polyCount,
@@ -473,12 +494,17 @@ bool AmeisenNavigation::CalculateFollowPath(dtNavMeshQuery* query, const dtQuery
         }
 
         Vector3 target = end.pos;
-        state->partial = polys[polyCount - 1] != end.poly;
 
-        if (state->partial)
+        if (polys[polyCount - 1] != end.poly)
         {
             query->closestPointOnPoly(polys[polyCount - 1], end.pos, target, nullptr);
         }
+
+        state->partial = polys[polyCount - 1] != end.poly || unreachable;
+        state->reason = static_cast<unsigned char>(!state->partial ? PathPartialReason::NONE
+                                                   : !unreachable && dtStatusDetail(status, DT_OUT_OF_NODES)
+                                                       ? PathPartialReason::SEARCH_LIMIT
+                                                       : PathPartialReason::UNREACHABLE);
 
         corridor.reset(start.poly, start.pos);
         corridor.setCorridor(target, polys, polyCount);
@@ -488,6 +514,11 @@ bool AmeisenNavigation::CalculateFollowPath(dtNavMeshQuery* query, const dtQuery
     if (partial)
     {
         *partial = state->partial;
+    }
+
+    if (reason)
+    {
+        *reason = static_cast<PathPartialReason>(state->reason);
     }
 
     path.Clear();
