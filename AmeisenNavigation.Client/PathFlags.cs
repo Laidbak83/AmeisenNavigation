@@ -70,6 +70,13 @@ namespace AmeisenNavigation.Client
         /// </summary>
         SurfaceInfo = 1 << 13,
 
+        /// <summary>
+        /// <see cref="AmeisenNavClient.GetPathEx"/> only: also return the off-mesh file id of every point
+        /// (<see cref="PathResult.LinkIds"/>, 0 = none): which elevator, boat or script a <see cref="PathPointFlags.Link"/>
+        /// stands for. Protocol 4 (server 1.12+).
+        /// </summary>
+        LinkIds = 1 << 14,
+
         /// <summary>Smooth natural movement: shortcuts, distance to walls and round corners.</summary>
         Fluid = AvoidWalls | Shortcut | RoundCorners,
     }
@@ -151,11 +158,13 @@ namespace AmeisenNavigation.Client
     /// (server 1.12+).</param>
     /// <param name="HitSearchLimit">Partial because the search ran out of nodes (too far or too winding): the path
     /// leads towards the target, follow it and ask again from further on (server 1.12+).</param>
+    /// <param name="LinkIds"><see cref="PathFlags.LinkIds"/>: off-mesh file id of every point (0 = none, set on the
+    /// point that leaves by the link), null if not requested or the path was smoothed.</param>
     /// <param name="Areas"><see cref="PathFlags.SurfaceInfo"/>: navmesh area id under every point (0 = none), null
     /// if not requested or the path was smoothed with Chaikin / Catmull-Rom / Bezier.</param>
     /// <param name="Info"><see cref="PathFlags.SurfaceInfo"/>: what the ground does at every point, null like
     /// <paramref name="Areas"/>.</param>
     public sealed record PathResult(Vector3[] Points, PathPointFlags[] Flags, bool IsPartial, byte[]? Areas = null,
                                     PathPointInfo[]? Info = null, bool IsUnreachable = false,
-                                    bool HitSearchLimit = false);
+                                    bool HitSearchLimit = false, uint[]? LinkIds = null);
 }

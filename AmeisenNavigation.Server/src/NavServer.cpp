@@ -180,8 +180,8 @@ void NavServer::ValidateConfig(AmeisenNavConfig& config, std::vector<std::string
     {
         errors.push_back("iMaxPointPath has to be a value >= 2");
     }
-    else if (sizeof(PathExResponseHeader) + static_cast<size_t>(config.maxPointPath) * (sizeof(Vector3) + 3) + 1
-             > ANTCP_MAX_RESPONSE_SIZE)
+    else if (sizeof(PathExResponseHeader) + static_cast<size_t>(config.maxPointPath) * (sizeof(Vector3) + 7) + 1 >
+             ANTCP_MAX_RESPONSE_SIZE)
     {
         errors.push_back("iMaxPointPath is too large for a single response");
     }
@@ -1089,12 +1089,15 @@ void NavServer::HandlePathEx(ClientHandler* handler, AnTcpMessageType type, cons
     unsigned char* areasPtr = surfaceInfo ? areas.data() : nullptr;
     bool partial = false;
     PathPartialReason reason = PathPartialReason::NONE;
+    const bool wantLinkIds = HasFlag(request.flags, PathRequestFlags::LINK_IDS);
+    std::vector<unsigned int> linkIds;
+    std::vector<unsigned int>* linkIdsPtr = wantLinkIds ? &linkIds : nullptr;
 
     bool ok = randomize ? Navigation->GetRandomPath(handler->GetId(), request.mapId, request.start, request.end, path,
                                                     Cfg.randomPathMaxDistance, &partial, &options, flags.data(),
-                                                    infoPtr, areasPtr, &reason)
+                                                    infoPtr, areasPtr, &reason, linkIdsPtr)
                         : Navigation->GetPath(handler->GetId(), request.mapId, request.start, request.end, path,
-                                              &partial, &options, flags.data(), infoPtr, areasPtr, &reason);
+                                              &partial, &options, flags.data(), infoPtr, areasPtr, &reason, linkIdsPtr);
 
     if (ok && partial && HasFlag(request.flags, PathRequestFlags::REQUIRE_COMPLETE))
     {
@@ -1128,7 +1131,9 @@ void NavServer::HandlePathEx(ClientHandler* handler, AnTcpMessageType type, cons
     // Legacy smoothing moved the points: their areas and info are unknown.
     const bool withInfo = surfaceInfo && result == &path;
     const auto count = static_cast<size_t>(result->pointCount);
-    int resultFlags = (partial ? PATH_RESULT_PARTIAL : 0) | (withInfo ? PATH_RESULT_SURFACE_INFO : 0);
+    const bool withLinks = wantLinkIds && result == &path;
+    int resultFlags = (partial ? PATH_RESULT_PARTIAL : 0) | (withInfo ? PATH_RESULT_SURFACE_INFO : 0) |
+                      (withLinks ? PATH_RESULT_LINK_IDS : 0);
 
     if (partial && reason == PathPartialReason::UNREACHABLE)
     {
@@ -1140,7 +1145,7 @@ void NavServer::HandlePathEx(ClientHandler* handler, AnTcpMessageType type, cons
     }
 
     const PathExResponseHeader header{result->pointCount, resultFlags};
-    std::vector<char> buffer(sizeof(header) + count * (sizeof(Vector3) + (withInfo ? 3 : 1)));
+    std::vector<char> buffer(sizeof(header) + count * (sizeof(Vector3) + (withInfo ? 3 : 1) + (withLinks ? 4 : 0)));
     char* out = buffer.data();
     std::memcpy(out, &header, sizeof(header));
     out += sizeof(header);
@@ -1152,6 +1157,23 @@ void NavServer::HandlePathEx(ClientHandler* handler, AnTcpMessageType type, cons
     {
         std::memcpy(out + count, areas.data(), count);
         std::memcpy(out + 2 * count, info.data(), count);
+    }
+
+    if (withLinks)
+    {
+        // One id per point: the k-th point flagged OFFMESH gets the k-th id (refinement keeps them all, in order).
+        std::vector<unsigned int> perPoint(count, 0u);
+        size_t next = 0;
+
+        for (size_t i = 0; i < count; ++i)
+        {
+            if ((flags[i] & PATH_POINT_OFFMESH) && next < linkIds.size())
+            {
+                perPoint[i] = linkIds[next++];
+            }
+        }
+
+        std::memcpy(out + (withInfo ? 3 : 1) * count, perPoint.data(), count * sizeof(unsigned int));
     }
 
     handler->SendData(type, buffer.data(), buffer.size());

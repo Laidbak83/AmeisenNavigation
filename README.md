@@ -263,7 +263,7 @@ request gets exactly one response with the same type. Positions are WoW coordina
 | `11` SET_AVOID_ZONES | `int mapId, int count, {Vector3 center, float radius, float cost}[count]` (count 0 = none) | `bool` |
 | `12` STEER | `int mapId, Vector3 position, Vector3 velocity, Vector3 target, float maxSpeed, float radius, float deltaTime, int count, {Vector3 position, Vector3 velocity, float radius}[count]` | `int ok, Vector3 velocity, Vector3 position` |
 | `13` REPORT_STUCK | `int mapId, Vector3 position, float radius` (`<= 0` = default) | `bool` |
-| `14` PATH_EX | same as PATH | `int count, int resultFlags (1 = partial, 2 = surface info, 4 = unreachable, 8 = search limit), Vector3 points[count], uint8 pointFlags[count]` + with result flag `2`: `uint8 areas[count], uint8 pointInfo[count]` (count 0 on failure) |
+| `14` PATH_EX | same as PATH | `int count, int resultFlags (1 = partial, 2 = surface info, 4 = unreachable, 8 = search limit, 16 = link ids), Vector3 points[count], uint8 pointFlags[count]` + with result flag `2`: `uint8 areas[count], uint8 pointInfo[count]` + with `16`: `uint32 linkIds[count]` (count 0 on failure) |
 | `15` LINE_OF_SIGHT | `int mapId, int ignore, Vector3 start, Vector3 end` | `int result (1 hit, 0 clear, -1 no static world), float t, Vector3 position, Vector3 normal, uint32 source, int area` |
 | `16` SURFACES | `int mapId, int ignore, float x, float y, float zTop, float zBottom` | `int count (-1 no static world), uint32 areaId, {float z, Vector3 normal, uint32 source, uint8 area, uint8 flags, uint16}[count]` |
 | `17` SWEEP | `int mapId, int ignore, Vector3 start, Vector3 end, float radius, float height, float stepHeight` | same as LINE_OF_SIGHT, `position` = where the body stops |
@@ -273,7 +273,7 @@ Path flags: `1` Chaikin, `2` Catmull-Rom, `4` Bezier (one smoothing), `8` valida
 `16` validate with move along surface, `32` require a complete path (fail if the end is unreachable instead of
 returning a path to the closest reachable point), `64` wall margin, `128` shortcut, `256` round corners, `512` follow
 (PATH and PATH_EX), `1024` random offsets (PATH_EX), `2048` clear body (static world: sweep a body along the path, go
-around what it runs into), `4096` detail (dense waypoints, see below), `8192` surface info (PATH_EX). Client states: `0` normal, `1` Alliance, `2` Horde, `3` dead.
+around what it runs into), `4096` detail (dense waypoints, see below), `8192` surface info (PATH_EX), `16384` link ids (PATH_EX). Client states: `0` normal, `1` Alliance, `2` Horde, `3` dead.
 Unknown message types get an empty response. The protocol version (GET_CONFIG) tells clients what is available:
 `2` (1.9) EXPLORE_POLY and flag `32`, `3` (1.10) everything else. Older clients simply ignore the GET_CONFIG trailer,
 older servers ignore the new flags and the tuning trailer.
@@ -349,8 +349,10 @@ the export's jump/drop links and the `sOffMeshFile` connections, not the automat
 
 **Off-mesh connections.** Area ids `40` jump, `41` drop, `42` link, polygon flags `64` jump, `128` drop, the same for
 ANP and MMAP navmeshes. Jumps are excluded by the default filters (a bot has to jump there): enable them with a
-CONFIGURE_FILTER cost for area `40`. `sOffMeshFile` lines are `mapId tileX,tileY (x y z) (x y z) radius [area [flags]]`
-(WoW coordinates, bidirectional, the tile is ignored). Automatic drop links (`fAutoDropHeight`) only see the navmesh:
+CONFIGURE_FILTER cost for area `40`. `sOffMeshFile` lines are `mapId tileX,tileY (x y z) (x y z) radius [area [flags
+[id]]]` (WoW coordinates, bidirectional, the tile is ignored). The id (1 to 16777215) names the link for the bot: with
+path flag `16384` PATH_EX returns it on the point that leaves by the link (`uint32` per point, 0 elsewhere), so the bot
+knows which script to run there (an elevator, a boat, a portal) instead of guessing from the position. Automatic drop links (`fAutoDropHeight`) only see the navmesh:
 a ledge can't be told apart from a wall with ground behind it (an upper floor next to the street), keep the reach
 small. Exports with geometry checks are better.
 

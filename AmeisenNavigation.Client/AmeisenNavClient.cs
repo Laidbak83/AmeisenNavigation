@@ -869,9 +869,10 @@ namespace AmeisenNavigation.Client
             int pointSize = Marshal.SizeOf<Vector3>();
 
             bool withInfo = (header.ResultFlags & 2) != 0;
+            bool withLinks = (header.ResultFlags & 16) != 0;
 
             if (header.PointCount <= 0
-                || data.Length != headerSize + (long)header.PointCount * (pointSize + (withInfo ? 3 : 1)))
+                || data.Length != headerSize + (long)header.PointCount * (pointSize + (withInfo ? 3 : 1) + (withLinks ? 4 : 0)))
                 return null;
 
             var points = MemoryMarshal.Cast<byte, Vector3>(data.Slice(headerSize, header.PointCount * pointSize)).ToArray();
@@ -895,8 +896,16 @@ namespace AmeisenNavigation.Client
                     info[i] = (PathPointInfo)infoBytes[i];
             }
 
+            uint[]? linkIds = null;
+
+            if (withLinks)
+            {
+                int offset = headerSize + header.PointCount * (pointSize + (withInfo ? 3 : 1));
+                linkIds = MemoryMarshal.Cast<byte, uint>(data.Slice(offset, header.PointCount * 4)).ToArray();
+            }
+
             return new PathResult(points, flags, (header.ResultFlags & 1) != 0, areas, info,
-                                  (header.ResultFlags & 4) != 0, (header.ResultFlags & 8) != 0);
+                                  (header.ResultFlags & 4) != 0, (header.ResultFlags & 8) != 0, linkIds);
         }
 
         private bool SendAvoidZonesInternal(int mapId, AvoidZone[] zones)

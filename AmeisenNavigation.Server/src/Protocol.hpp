@@ -29,6 +29,7 @@
 ///                              (RANDOMIZE flag for random offsets)
 ///                              + with PATH_RESULT_SURFACE_INFO: pointCount uint8 navmesh areas
 ///                              + pointCount uint8 PathPointInfo
+///                              + with PATH_RESULT_LINK_IDS: pointCount uint32 off-mesh file ids
 ///   LINE_OF_SIGHT           -> WorldHitResponse, request: LineOfSightData
 ///   SURFACES                -> SurfacesResponseHeader + count SurfaceData, request: SurfacesRequestData
 ///   SWEEP                   -> WorldHitResponse, request: SweepData
@@ -82,6 +83,7 @@ enum class PathRequestFlags : int
     CLEAR_BODY = 1 << 11,        // sweep a body along the path (static world), go around what blocks it
     DETAIL = 1 << 12,            // dense waypoints on the surface: area changes, height bends, max spacing
     SURFACE_INFO = 1 << 13,      // PATH_EX only: navmesh area and PathPointInfo of every point
+    LINK_IDS = 1 << 14,          // PATH_EX only: off-mesh file id of every point (0 = none)
 };
 
 /// Bumped whenever requests/responses are added or extended (reported by GET_CONFIG).
@@ -91,7 +93,8 @@ enum class PathRequestFlags : int
 ///      REPORT_STUCK, PATH_EX, CONFIGURE_FILTER cost 0 (forbid) / > 0 (allow areas excluded by default)
 ///   4: LINE_OF_SIGHT, SURFACES, SWEEP (static world), SET_OBJECTS (game objects at runtime), CLEAR_BODY and the
 ///      PATH_EX point flags BYPASS / BLOCKED, DETAIL and the PathDetailData trailer,
-///      SURFACE_INFO (PATH_EX areas and PathPointInfo), PATH_EX result flags UNREACHABLE / SEARCH_LIMIT
+///      SURFACE_INFO (PATH_EX areas and PathPointInfo), PATH_EX result flags UNREACHABLE / SEARCH_LIMIT,
+///      LINK_IDS (PATH_EX off-mesh file ids)
 constexpr int PROTOCOL_VERSION = 4;
 
 constexpr bool HasFlag(int flags, PathRequestFlags flag) noexcept { return (flags & static_cast<int>(flag)) != 0; }
@@ -137,6 +140,7 @@ enum PathExResultFlags : int
                                        // the way), asking again won't help
     PATH_RESULT_SEARCH_LIMIT = 1 << 3, // partial: the search ran out of nodes (too far or too winding), the path
                                        // leads towards the target, ask again from further on
+    PATH_RESULT_LINK_IDS = 1 << 4,     // pointCount uint32 link ids follow everything else (not after legacy smoothing)
 };
 
 struct MoveRequestData

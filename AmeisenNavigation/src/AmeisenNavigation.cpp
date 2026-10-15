@@ -185,7 +185,8 @@ bool AmeisenNavigation::PreloadMap(int mapId) noexcept
 
 bool AmeisenNavigation::GetPath(size_t clientId, int mapId, const Vector3& startPosition, const Vector3& endPosition,
                                 Path& path, bool* partial, const PathOptions* options, unsigned char* pointFlags,
-                                unsigned char* pointInfo, unsigned char* pointAreas, PathPartialReason* reason)
+                                unsigned char* pointInfo, unsigned char* pointAreas, PathPartialReason* reason,
+                                std::vector<unsigned int>* linkIds)
 {
     path.Clear();
     const auto ctx = GetQueryContext(clientId, mapId);
@@ -210,7 +211,7 @@ bool AmeisenNavigation::GetPath(size_t clientId, int mapId, const Vector3& start
         return false;
     }
 
-    ToPointFlags(ctx.query, flags, refs, path.pointCount, flags);
+    ToPointFlags(ctx.query, flags, refs, path.pointCount, flags, linkIds);
     Vector3 target;
     endPosition.CopyToRDCoords(target);
     RefineAll(ctx.query, ctx.filter, path, flags, target, options, true);
@@ -248,7 +249,8 @@ bool AmeisenNavigation::GetPath(size_t clientId, int mapId, const Vector3& start
 bool AmeisenNavigation::GetRandomPath(size_t clientId, int mapId, const Vector3& startPosition,
                                       const Vector3& endPosition, Path& path, float maxRandomDistance, bool* partial,
                                       const PathOptions* options, unsigned char* pointFlags, unsigned char* pointInfo,
-                                      unsigned char* pointAreas, PathPartialReason* reason)
+                                      unsigned char* pointAreas, PathPartialReason* reason,
+                                      std::vector<unsigned int>* linkIds)
 {
     path.Clear();
     const auto ctx = GetQueryContext(clientId, mapId);
@@ -271,7 +273,7 @@ bool AmeisenNavigation::GetRandomPath(size_t clientId, int mapId, const Vector3&
         return false;
     }
 
-    ToPointFlags(ctx.query, flags, cornerRefs, path.pointCount, flags);
+    ToPointFlags(ctx.query, flags, cornerRefs, path.pointCount, flags, linkIds);
     Vector3 target;
     endPosition.CopyToRDCoords(target);
 
@@ -374,9 +376,15 @@ bool AmeisenNavigation::GetRandomPath(size_t clientId, int mapId, const Vector3&
 }
 
 void AmeisenNavigation::ToPointFlags(const dtNavMeshQuery* query, const unsigned char* detourFlags,
-                                     const dtPolyRef* refs, int count, unsigned char* out) noexcept
+                                     const dtPolyRef* refs, int count, unsigned char* out,
+                                     std::vector<unsigned int>* linkIds) noexcept
 {
     const dtNavMesh* mesh = query->getAttachedNavMesh();
+
+    if (linkIds)
+    {
+        linkIds->clear();
+    }
 
     for (int i = 0; i < count; ++i)
     {
@@ -390,11 +398,22 @@ void AmeisenNavigation::ToPointFlags(const dtNavMeshQuery* query, const unsigned
             f |= PATH_POINT_OFFMESH;
             const dtOffMeshConnection* con = mesh ? mesh->getOffMeshConnectionByRef(refs[i]) : nullptr;
 
-            switch (con ? static_cast<OffMeshLinkKind>(con->userId) : OffMeshLinkKind::UNKNOWN)
+            switch (con ? OffMeshKindOf(con->userId) : OffMeshLinkKind::UNKNOWN)
             {
                 case OffMeshLinkKind::JUMP: f |= PATH_POINT_JUMP; break;
                 case OffMeshLinkKind::DROP: f |= PATH_POINT_DROP; break;
                 default: f |= PATH_POINT_LINK; break;
+            }
+
+            if (linkIds)
+            {
+                try
+                {
+                    linkIds->push_back(con ? OffMeshIdOf(con->userId) : 0u);
+                }
+                catch (...)
+                {
+                }
             }
         }
 

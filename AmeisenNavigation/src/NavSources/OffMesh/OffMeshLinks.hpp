@@ -18,9 +18,10 @@
 
 namespace OffMeshLinks {
 /// Connections of one map from a file in TrinityCore's offmesh.txt format (WoW coordinates, bidirectional):
-///   mapId tileX,tileY (x y z) (x y z) radius [areaId [flags]]   // comment
+///   mapId tileX,tileY (x y z) (x y z) radius [areaId [flags [id]]]   // comment
 /// The tile is ignored (Detour finds it from the start position). Without an area the connection gets
-/// AREA_OFFMESH_LINK and walkable flags (polyFlags).
+/// AREA_OFFMESH_LINK and walkable flags (polyFlags). The id (1 .. 2^24 - 1, 0 = none) is reported to clients per
+/// path point (PATH_EX LINK_IDS) so a bot knows which script a link stands for (an elevator, a boat).
 inline std::vector<OffMeshLink> ReadFile(const std::filesystem::path& file, int mapId, unsigned short polyFlags)
 {
     std::vector<OffMeshLink> links;
@@ -36,9 +37,11 @@ inline std::vector<OffMeshLink> ReadFile(const std::filesystem::path& file, int 
         float radius = 0.0f;
         unsigned int area = AREA_OFFMESH_LINK;
         unsigned int flags = polyFlags;
+        unsigned int id = 0;
 
-        const int scanned = std::sscanf(line.c_str(), "%u %u,%u (%f %f %f) (%f %f %f) %f %u %u", &map, &tileX, &tileY,
-                                        &from[0], &from[1], &from[2], &to[0], &to[1], &to[2], &radius, &area, &flags);
+        const int scanned =
+            std::sscanf(line.c_str(), "%u %u,%u (%f %f %f) (%f %f %f) %f %u %u %u", &map, &tileX, &tileY, &from[0],
+                        &from[1], &from[2], &to[0], &to[1], &to[2], &radius, &area, &flags, &id);
 
         if (scanned < 10 || static_cast<int>(map) != mapId)
         {
@@ -48,8 +51,8 @@ inline std::vector<OffMeshLink> ReadFile(const std::filesystem::path& file, int 
         const Vector3 start(from);
         const Vector3 end(to);
 
-        if (!start.IsFinite() || !end.IsFinite() || !std::isfinite(radius) || radius <= 0.0f || radius > 50.0f
-            || area >= DT_MAX_AREAS || flags > 0xffff)
+        if (!start.IsFinite() || !end.IsFinite() || !std::isfinite(radius) || radius <= 0.0f || radius > 50.0f ||
+            area >= DT_MAX_AREAS || flags > 0xffff || id > OFFMESH_LINK_MAX_ID)
         {
             LogW("Skipping invalid off-mesh connection in ", file.string(), ": ", line);
             continue;
@@ -62,7 +65,7 @@ inline std::vector<OffMeshLink> ReadFile(const std::filesystem::path& file, int 
         link.bidirectional = true;
         link.area = static_cast<unsigned char>(area);
         link.flags = static_cast<unsigned short>(flags);
-        link.userId = static_cast<unsigned int>(OffMeshLinkKind::CUSTOM);
+        link.userId = MakeOffMeshUserId(OffMeshLinkKind::CUSTOM, id);
         links.push_back(link);
     }
 

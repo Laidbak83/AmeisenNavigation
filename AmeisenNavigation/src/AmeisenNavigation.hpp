@@ -293,13 +293,14 @@ public:
     bool GetPath(size_t clientId, int mapId, const Vector3& startPosition, const Vector3& endPosition, Path& path,
                  bool* partial = nullptr, const PathOptions* options = nullptr, unsigned char* pointFlags = nullptr,
                  unsigned char* pointInfo = nullptr, unsigned char* pointAreas = nullptr,
-                 PathPartialReason* reason = nullptr);
+                 PathPartialReason* reason = nullptr, std::vector<unsigned int>* linkIds = nullptr);
 
     /// Find a path with randomized intermediate waypoints (within maxRandomDistance).
     bool GetRandomPath(size_t clientId, int mapId, const Vector3& startPosition, const Vector3& endPosition, Path& path,
                        float maxRandomDistance, bool* partial = nullptr, const PathOptions* options = nullptr,
                        unsigned char* pointFlags = nullptr, unsigned char* pointInfo = nullptr,
-                       unsigned char* pointAreas = nullptr, PathPartialReason* reason = nullptr);
+                       unsigned char* pointAreas = nullptr, PathPartialReason* reason = nullptr,
+                       std::vector<unsigned int>* linkIds = nullptr);
 
     /// Route that explores an area: waypoints on a hexagonal grid (`spacing` apart) inside the polygon
     /// (WoW x/y outline, the outline's z picks the floor), snapped to the navmesh, visited in a short tour
@@ -491,7 +492,7 @@ private:
 
     /// Detour straight path flags + corner refs -> PathPointFlags (in place allowed: out may be detourFlags).
     static void ToPointFlags(const dtNavMeshQuery* query, const unsigned char* detourFlags, const dtPolyRef* refs,
-                             int count, unsigned char* out) noexcept;
+                             int count, unsigned char* out, std::vector<unsigned int>* linkIds = nullptr) noexcept;
 
     /// Zone detours and options for a path (RD) with PathPointFlags, in pieces between off-mesh connections (their
     /// ends never move). flags is updated with the path.

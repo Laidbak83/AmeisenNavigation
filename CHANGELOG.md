@@ -62,6 +62,9 @@ static world". Re-export to get the `.anw` and `gameobjects.ano` files.
   microseconds instead of a search that burns its whole node budget (measured: 38 µs vs 13.8 ms for a 200 yard
   request). PATH_EX result flags `4` UNREACHABLE and `8` SEARCH_LIMIT say why a path is partial; C#:
   `PathResult.IsUnreachable` / `HitSearchLimit`.
+- Off-mesh file links take an optional id (`... radius area flags id`); path flag `16384` LINK_IDS (PATH_EX) returns
+  it per point (result flag `16`) so a bot knows which elevator, boat or portal script a link stands for. C#:
+  `PathFlags.LinkIds`, `PathResult.LinkIds`.
 
 ### Fixed
 

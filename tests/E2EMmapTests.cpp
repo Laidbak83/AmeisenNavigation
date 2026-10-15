@@ -412,8 +412,9 @@ TEST_CASE(OffMesh_FileLinksAndJumpsAreReported)
     {
         std::ofstream out(file);
         out << "// comment line\n";
-        out << std::format("{} 32,32 (-300 {} 0) (-300 {} 0) 1.5  // over the wall\n", TestWorld::MAP_ID,
-                           TestWorld::WALL_X - 3.0f, TestWorld::WALL_X + 4.0f);
+        out << std::format(
+            "{} 32,32 (-300 {} 0) (-300 {} 0) 1.5 42 4 4242  // over the wall (area link, flags ground), id 4242\n",
+            TestWorld::MAP_ID, TestWorld::WALL_X - 3.0f, TestWorld::WALL_X + 4.0f);
         out << "999 1,1 (0 0 0) (1 1 1) 1.0\n";          // other map
         out << "1 1,1 (nan 0 0) (1 1 1) 1.0\n";          // invalid
     }
@@ -427,9 +428,13 @@ TEST_CASE(OffMesh_FileLinksAndJumpsAreReported)
     const Vector3 end = Wow(-200.0f, 0.0f, -300.0f);
     Path path(256);
     std::vector<unsigned char> flags(256);
-    REQUIRE(nav.GetPath(1, TestWorld::MAP_ID, start, end, path, nullptr, nullptr, flags.data()));
+    std::vector<unsigned int> linkIds;
+    REQUIRE(nav.GetPath(1, TestWorld::MAP_ID, start, end, path, nullptr, nullptr, flags.data(), nullptr, nullptr,
+                        nullptr, &linkIds));
     CHECK_EQ(nav.GetAddedOffMeshLinks(TestWorld::MAP_ID), 1);
     CHECK_EQ(CountFlag(flags.data(), path.pointCount, PATH_POINT_LINK), 1);
+    REQUIRE(linkIds.size() == 1);
+    CHECK_EQ(static_cast<int>(linkIds[0]), 4242); // the file's id travels with the link
 
     // Refinement keeps both ends of the link.
     PathOptions all;

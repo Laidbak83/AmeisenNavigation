@@ -1,5 +1,8 @@
 #include "TestFramework.hpp"
 
+#include <format>
+#include <fstream>
+
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -548,6 +551,58 @@ TEST_CASE(Server_PathExSurfaceInfo)
     std::memcpy(&header, response->data(), sizeof(header));
     CHECK_EQ(header.resultFlags, 0);
     CHECK(header.pointCount > 5);
+    CHECK(response->size() == sizeof(header) + static_cast<size_t>(header.pointCount) * (sizeof(Vector3) + 1));
+}
+
+TEST_CASE(Server_PathExLinkIds)
+{
+    // A link over the wall with an id in the off-mesh file: PATH_EX returns it on the point that takes the link.
+    const auto file = std::filesystem::temp_directory_path() / "anav_tests" / "server_offmesh.txt";
+    std::filesystem::create_directories(file.parent_path());
+
+    {
+        std::ofstream out(file);
+        out << std::format("{} 32,32 (-300 {} 0) (-300 {} 0) 1.5 42 4 777\n", TestWorld::MAP_ID,
+                           TestWorld::WALL_X - 3.0f, TestWorld::WALL_X + 4.0f);
+    }
+
+    ServerFixture server([&](AmeisenNavConfig& config) { config.offMeshFile = file.string(); });
+    RawClient client(server.Port());
+    REQUIRE(client.Connected());
+
+    PathRequestData request = MakePathRequest(static_cast<int>(PathRequestFlags::LINK_IDS));
+    request.start = Wow(-700.0f, 0.0f, -300.0f);
+    request.end = Wow(-200.0f, 0.0f, -300.0f);
+    auto response = client.Request(MessageType::PATH_EX, request);
+    REQUIRE(response.has_value());
+    PathExResponseHeader header{};
+    REQUIRE(response->size() >= sizeof(header));
+    std::memcpy(&header, response->data(), sizeof(header));
+    CHECK_EQ(header.resultFlags, static_cast<int>(PATH_RESULT_LINK_IDS));
+    const auto count = static_cast<size_t>(header.pointCount);
+    REQUIRE(count >= 2);
+    REQUIRE(response->size() == sizeof(header) + count * (sizeof(Vector3) + 1 + 4));
+    const auto* flags =
+        reinterpret_cast<const unsigned char*>(response->data()) + sizeof(header) + count * sizeof(Vector3);
+    std::vector<unsigned int> ids(count);
+    std::memcpy(ids.data(), flags + count, count * sizeof(unsigned int));
+    int links = 0;
+
+    for (size_t i = 0; i < count; ++i)
+    {
+        const bool link = (flags[i] & PATH_POINT_LINK) != 0;
+        links += link;
+        CHECK_EQ(static_cast<int>(ids[i]), link ? 777 : 0);
+    }
+
+    CHECK_EQ(links, 1);
+
+    // Without the flag: the old layout.
+    request.flags = 0;
+    response = client.Request(MessageType::PATH_EX, request);
+    REQUIRE(response.has_value());
+    std::memcpy(&header, response->data(), sizeof(header));
+    CHECK_EQ(header.resultFlags, 0);
     CHECK(response->size() == sizeof(header) + static_cast<size_t>(header.pointCount) * (sizeof(Vector3) + 1));
 }
 

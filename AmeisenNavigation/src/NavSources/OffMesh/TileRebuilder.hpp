@@ -23,7 +23,8 @@ struct OffMeshLink
     unsigned int userId = 0; // OffMeshLinkKind, reported to clients
 };
 
-/// What an off-mesh connection stands for, stored as its userId (PATH_EX reports it per point).
+/// What an off-mesh connection stands for, stored in the low byte of its userId (PATH_EX reports it per point); the
+/// upper 24 bits hold the link's id from the off-mesh file (0 = none).
 enum class OffMeshLinkKind : unsigned int
 {
     UNKNOWN = 0, // from the navmesh file (e.g. TrinityCore's offmesh.txt baked in by the generator)
@@ -31,6 +32,20 @@ enum class OffMeshLinkKind : unsigned int
     DROP = 2,    // walk off a ledge (falls down)
     JUMP = 3,    // jump over a low obstacle or a gap
 };
+
+constexpr unsigned int OFFMESH_LINK_MAX_ID = 0xffffffu;
+
+constexpr unsigned int MakeOffMeshUserId(OffMeshLinkKind kind, unsigned int id) noexcept
+{
+    return static_cast<unsigned int>(kind) | ((id & OFFMESH_LINK_MAX_ID) << 8);
+}
+
+constexpr OffMeshLinkKind OffMeshKindOf(unsigned int userId) noexcept
+{
+    return static_cast<OffMeshLinkKind>(userId & 0xffu);
+}
+
+constexpr unsigned int OffMeshIdOf(unsigned int userId) noexcept { return userId >> 8; }
 
 /// Adds off-mesh connections to tiles that are already in a navmesh. Detour only accepts off-mesh connections when a
 /// tile is created (dtCreateNavMeshData), so each affected tile is turned back into dtNavMeshCreateParams, gets the
