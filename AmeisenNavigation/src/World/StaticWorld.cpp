@@ -37,16 +37,16 @@ bool SegmentHitsBox(const float* origin, const float* inverse, const float* bmin
             continue;
         }
 
-        float near = (bmin[a] - origin[a]) * inverse[a];
-        float far = (bmax[a] - origin[a]) * inverse[a];
+        float tNear = (bmin[a] - origin[a]) * inverse[a];
+        float tFar = (bmax[a] - origin[a]) * inverse[a];
 
-        if (near > far)
+        if (tNear > tFar)
         {
-            std::swap(near, far);
+            std::swap(tNear, tFar);
         }
 
-        t0 = std::max(t0, near);
-        t1 = std::min(t1, far);
+        t0 = std::max(t0, tNear);
+        t1 = std::min(t1, tFar);
 
         if (t0 > t1)
         {

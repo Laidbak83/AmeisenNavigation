@@ -770,7 +770,15 @@ public:
         if (!name.empty() && name.find("..") == std::string::npos && name.find(':') == std::string::npos
             && name.front() != '/' && name.front() != '\\')
         {
-            if (auto parsed = TcData::ParseWorldModel(TcData::ReadFile(VmapsDir / name)))
+            // vmap4assembler writes "<spawn name>.vmo" (FILE00815136.xxx -> FILE00815136.xxx.vmo).
+            auto bytes = TcData::ReadFile(VmapsDir / (name + ".vmo"));
+
+            if (bytes.empty())
+            {
+                bytes = TcData::ReadFile(VmapsDir / name);
+            }
+
+            if (auto parsed = TcData::ParseWorldModel(bytes))
             {
                 model = std::make_shared<const TcData::WorldModel>(std::move(*parsed));
             }

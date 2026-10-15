@@ -1070,22 +1070,22 @@ bool AmeisenNavigation::PushFromEdge(const dtNavMeshQuery* query, const dtQueryF
         }
     }
 
-    const int near = room[0] < room[1] ? 0 : 1;
+    const int nearSide = room[0] < room[1] ? 0 : 1;
 
-    if (room[near] >= margin - 0.01f)
+    if (room[nearSide] >= margin - 0.01f)
     {
         return false; // far enough from both edges
     }
 
     // Towards the far side, up to the margin or the middle of the passage.
-    const float move = std::min(margin - room[near], std::max(0.0f, (room[1 - near] - room[near]) * 0.5f));
+    const float move = std::min(margin - room[nearSide], std::max(0.0f, (room[1 - nearSide] - room[nearSide]) * 0.5f));
 
     if (move < 0.05f)
     {
         return false;
     }
 
-    out = start.pos + side * (near == 0 ? -move : move);
+    out = start.pos + side * (nearSide == 0 ? -move : move);
     return SnapToSurface(query, filter, out) && out.DistanceTo(start.pos) > 0.05f;
 }
 

@@ -61,8 +61,16 @@ struct Structure
 
         const int triOffset = static_cast<int>(verts.size());
         verts.insert(verts.end(), other.verts.begin(), other.verts.end());
-        tris.reserve(tris.size() + other.tris.size());
-        triTypes.reserve(triTypes.size() + other.triTypes.size());
+        // Geometric growth: an exact reserve per Append copies the whole array each time (quadratic).
+        if (tris.capacity() < tris.size() + other.tris.size())
+        {
+            tris.reserve(std::max(tris.size() + other.tris.size(), tris.capacity() * 2));
+        }
+
+        if (triTypes.capacity() < triTypes.size() + other.triTypes.size())
+        {
+            triTypes.reserve(std::max(triTypes.size() + other.triTypes.size(), triTypes.capacity() * 2));
+        }
 
         for (size_t i = 0; i < other.tris.size(); ++i)
         {

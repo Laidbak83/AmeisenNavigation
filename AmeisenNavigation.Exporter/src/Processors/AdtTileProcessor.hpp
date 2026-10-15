@@ -722,8 +722,24 @@ private:
         }
 
         const GeometryColumns geometry(s, trisBegin, trisEnd, tbbMin, tbbMax);
-        const std::vector<OffMeshLink> links = OffMeshBuilder::FindLinks(
+        std::vector<OffMeshLink> links = OffMeshBuilder::FindLinks(
             *mesh, geometry, Config.agentClimb, Config.agentHeight, tbbMin, tbbMax, Config.links);
+
+        // Off-mesh connections are polygons (16 bit index) with two vertices each (16 bit too): a dense tile
+        // (Stormwind) would be refused as invalid. Keep as many as fit, jumps before drops.
+        {
+            const int polyRoom = 0xffff - 1 - params.polyCount;
+            const int vertRoom = (0xffff - 1 - params.vertCount) / 2;
+            const size_t room = static_cast<size_t>(std::max(0, std::min(polyRoom, vertRoom)));
+
+            if (links.size() > room)
+            {
+                std::stable_partition(links.begin(), links.end(), [](const OffMeshLink& l) {
+                    return l.userId == static_cast<unsigned int>(OffMeshLinkKind::JUMP);
+                });
+                links.resize(room);
+            }
+        }
 
         if (links.empty())
         {
