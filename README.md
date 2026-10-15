@@ -201,7 +201,7 @@ there, both start with TrinityCore master's tools:
      of wago.tools or any DB2 tool for the client build: columns `ID`, `ParentAreaID`, `Flags[0]`,
      `FactionGroupMask`; `Flags` 0x08 marks the capitals). WMO liquid kinds come from `--liquid-types` (`ID`,
      `SoundBank`), without it the classic ids are used (most WMO liquids) and other ids are water. Roads aren't in
-     TrinityCore's files: no road areas. Then `bUseAnpFiles=1` on the server.
+     TrinityCore's files: no road areas. Then `bUseAnpFileFormat=1` on the server.
    - **TrinityCore's own navmeshes**: run `mmaps_generator` too and point the server at the `mmaps` folder
      (`sMmapsPath`); `iMmapFormat=0` detects TrinityCore master (MMAP v16) from the magic in front of the `.mmap`
      files (or set `3`). Child maps (phases) without their own files can use their parent's with `sParentMaps`.
