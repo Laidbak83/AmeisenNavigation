@@ -262,7 +262,7 @@ request gets exactly one response with the same type. Positions are WoW coordina
 | `11` SET_AVOID_ZONES | `int mapId, int count, {Vector3 center, float radius, float cost}[count]` (count 0 = none) | `bool` |
 | `12` STEER | `int mapId, Vector3 position, Vector3 velocity, Vector3 target, float maxSpeed, float radius, float deltaTime, int count, {Vector3 position, Vector3 velocity, float radius}[count]` | `int ok, Vector3 velocity, Vector3 position` |
 | `13` REPORT_STUCK | `int mapId, Vector3 position, float radius` (`<= 0` = default) | `bool` |
-| `14` PATH_EX | same as PATH | `int count, int resultFlags (1 = partial), Vector3 points[count], uint8 pointFlags[count]` (count 0 on failure) |
+| `14` PATH_EX | same as PATH | `int count, int resultFlags (1 = partial, 2 = surface info), Vector3 points[count], uint8 pointFlags[count]` + with result flag `2`: `uint8 areas[count], uint8 pointInfo[count]` (count 0 on failure) |
 | `15` LINE_OF_SIGHT | `int mapId, int ignore, Vector3 start, Vector3 end` | `int result (1 hit, 0 clear, -1 no static world), float t, Vector3 position, Vector3 normal, uint32 source, int area` |
 | `16` SURFACES | `int mapId, int ignore, float x, float y, float zTop, float zBottom` | `int count (-1 no static world), uint32 areaId, {float z, Vector3 normal, uint32 source, uint8 area, uint8 flags, uint16}[count]` |
 | `17` SWEEP | `int mapId, int ignore, Vector3 start, Vector3 end, float radius, float height, float stepHeight` | same as LINE_OF_SIGHT, `position` = where the body stops |
@@ -272,7 +272,7 @@ Path flags: `1` Chaikin, `2` Catmull-Rom, `4` Bezier (one smoothing), `8` valida
 `16` validate with move along surface, `32` require a complete path (fail if the end is unreachable instead of
 returning a path to the closest reachable point), `64` wall margin, `128` shortcut, `256` round corners, `512` follow
 (PATH and PATH_EX), `1024` random offsets (PATH_EX), `2048` clear body (static world: sweep a body along the path, go
-around what it runs into), `4096` detail (dense waypoints, see below). Client states: `0` normal, `1` Alliance, `2` Horde, `3` dead.
+around what it runs into), `4096` detail (dense waypoints, see below), `8192` surface info (PATH_EX). Client states: `0` normal, `1` Alliance, `2` Horde, `3` dead.
 Unknown message types get an empty response. The protocol version (GET_CONFIG) tells clients what is available:
 `2` (1.9) EXPLORE_POLY and flag `32`, `3` (1.10) everything else. Older clients simply ignore the GET_CONFIG trailer,
 older servers ignore the new flags and the tuning trailer.
@@ -303,6 +303,13 @@ leaves the straight line between two waypoints by more than `fWaypointHeightErro
 `fWaypointSpacing` (4 yards) apart. Corners, start, end and off-mesh connections stay with their flags, new points have
 none. A path that wouldn't fit `iMaxPointPath` gets a larger spacing (the bends and ground changes stay). Optional
 trailer after the tuning trailer: `float spacing, float heightError` (`<= 0` = defaults).
+
+**Surface info** (`8192`, PATH_EX): the response also carries, per point, the navmesh area under it (ANP area id, 0 =
+none) and what the ground does there: `1` the ground changes after this point (water, road, building floor, faction
+border), `2` crest (up before, down after), `4` dip, `8` the slope changes (stairs, a ramp starts or ends), `16` added
+by DETAIL only to keep the spacing. Crests, dips, slope changes and spacing points come from DETAIL, the areas and
+ground changes are there for every path. Result flag `2` says they are present: not after the legacy smoothings (`1`,
+`2`, `4`), which move the points.
 
 **Static world** (protocol 4): `{mapId:03}.anw` files written by the exporter next to the `.anp` (`sWorldPath`
 to keep them elsewhere, `--no-world` to skip them). Tiles are read when a query needs them and kept per map
@@ -371,6 +378,8 @@ Vector3[]? dense = nav.GetPath(0, start, end, PathFlags.Fluid | PathFlags.Detail
 
 PathResult? detailed = nav.GetPathEx(0, start, end);
 // detailed.Flags[i].HasFlag(PathPointFlags.Jump): jump from Points[i] to Points[i + 1]
+PathResult? ground = nav.GetPathEx(0, start, end, PathFlags.Detail | PathFlags.SurfaceInfo);
+// ground.Areas[i] (AnpArea), ground.Info[i].HasFlag(PathPointInfo.SurfaceChange): water/road/... starts after Points[i]
 
 nav.SetAvoidZones(0, [new AvoidZone(dangerousMob, 20f, cost: 10f)]);      // resent after a reconnect
 SteerResult step = nav.Steer(0, position, velocity, nextWaypoint, maxSpeed: 7f, units: nearbyPlayers);

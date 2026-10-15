@@ -175,7 +175,7 @@ void NavServer::ValidateConfig(AmeisenNavConfig& config, std::vector<std::string
     {
         errors.push_back("iMaxPointPath has to be a value >= 2");
     }
-    else if (sizeof(PathExResponseHeader) + static_cast<size_t>(config.maxPointPath) * (sizeof(Vector3) + 1) + 1
+    else if (sizeof(PathExResponseHeader) + static_cast<size_t>(config.maxPointPath) * (sizeof(Vector3) + 3) + 1
              > ANTCP_MAX_RESPONSE_SIZE)
     {
         errors.push_back("iMaxPointPath is too large for a single response");
@@ -1076,12 +1076,18 @@ void NavServer::HandlePathEx(ClientHandler* handler, AnTcpMessageType type, cons
     Path& path = client->GetPathBuffer();
     Path& scratch = client->GetScratchPathBuffer();
     std::vector<unsigned char> flags(static_cast<size_t>(path.maxSize), 0);
+    const bool surfaceInfo = HasFlag(request.flags, PathRequestFlags::SURFACE_INFO);
+    std::vector<unsigned char> info(surfaceInfo ? static_cast<size_t>(path.maxSize) : 0, 0);
+    std::vector<unsigned char> areas(info.size(), 0);
+    unsigned char* infoPtr = surfaceInfo ? info.data() : nullptr;
+    unsigned char* areasPtr = surfaceInfo ? areas.data() : nullptr;
     bool partial = false;
 
     bool ok = randomize ? Navigation->GetRandomPath(handler->GetId(), request.mapId, request.start, request.end, path,
-                                                    Cfg.randomPathMaxDistance, &partial, &options, flags.data())
+                                                    Cfg.randomPathMaxDistance, &partial, &options, flags.data(),
+                                                    infoPtr, areasPtr)
                         : Navigation->GetPath(handler->GetId(), request.mapId, request.start, request.end, path,
-                                              &partial, &options, flags.data());
+                                              &partial, &options, flags.data(), infoPtr, areasPtr);
 
     if (ok && partial && HasFlag(request.flags, PathRequestFlags::REQUIRE_COMPLETE))
     {
@@ -1112,13 +1118,25 @@ void NavServer::HandlePathEx(ClientHandler* handler, AnTcpMessageType type, cons
         }
     }
 
-    const PathExResponseHeader header{result->pointCount, partial ? PATH_RESULT_PARTIAL : 0};
-    std::vector<char> buffer(sizeof(header) + static_cast<size_t>(result->pointCount) * (sizeof(Vector3) + 1));
-    std::memcpy(buffer.data(), &header, sizeof(header));
-    std::memcpy(buffer.data() + sizeof(header), result->points,
-                static_cast<size_t>(result->pointCount) * sizeof(Vector3));
-    std::memcpy(buffer.data() + sizeof(header) + static_cast<size_t>(result->pointCount) * sizeof(Vector3),
-                flags.data(), static_cast<size_t>(result->pointCount));
+    // Legacy smoothing moved the points: their areas and info are unknown.
+    const bool withInfo = surfaceInfo && result == &path;
+    const auto count = static_cast<size_t>(result->pointCount);
+    const PathExResponseHeader header{result->pointCount,
+                                      (partial ? PATH_RESULT_PARTIAL : 0) | (withInfo ? PATH_RESULT_SURFACE_INFO : 0)};
+    std::vector<char> buffer(sizeof(header) + count * (sizeof(Vector3) + (withInfo ? 3 : 1)));
+    char* out = buffer.data();
+    std::memcpy(out, &header, sizeof(header));
+    out += sizeof(header);
+    std::memcpy(out, result->points, count * sizeof(Vector3));
+    out += count * sizeof(Vector3);
+    std::memcpy(out, flags.data(), count);
+
+    if (withInfo)
+    {
+        std::memcpy(out + count, areas.data(), count);
+        std::memcpy(out + 2 * count, info.data(), count);
+    }
+
     handler->SendData(type, buffer.data(), buffer.size());
 }
 

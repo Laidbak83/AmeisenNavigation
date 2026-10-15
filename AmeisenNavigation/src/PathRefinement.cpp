@@ -656,8 +656,18 @@ bool SurfaceAt(const dtNavMeshQuery* query, const dtPolyRef* visited, int count,
     return false;
 }
 
+/// Why a profile sample becomes a waypoint.
+enum SampleKind : unsigned char
+{
+    SAMPLE_SKIP = 0,
+    SAMPLE_END,    // segment start/end or the far side of a ground change
+    SAMPLE_BORDER, // the near side of a ground change
+    SAMPLE_BEND,   // the height profile bends here
+};
+
 /// Douglas-Peucker on the height profile: keep the samples where the surface leaves the line by more than the error.
-void KeepBends(const std::vector<ProfileSample>& samples, size_t from, size_t to, float error, std::vector<bool>& keep)
+void KeepBends(const std::vector<ProfileSample>& samples, size_t from, size_t to, float error,
+               std::vector<unsigned char>& keep)
 {
     if (to <= from + 1)
     {
@@ -682,7 +692,7 @@ void KeepBends(const std::vector<ProfileSample>& samples, size_t from, size_t to
 
     if (worst > error)
     {
-        keep[index] = true;
+        keep[index] = SAMPLE_BEND;
         KeepBends(samples, from, index, error, keep);
         KeepBends(samples, index, to, error, keep);
     }
@@ -690,7 +700,7 @@ void KeepBends(const std::vector<ProfileSample>& samples, size_t from, size_t to
 } // namespace
 
 void AmeisenNavigation::DetailPath(const dtNavMeshQuery* query, const dtQueryFilter* filter, Path& path,
-                                   unsigned char* flags, const PathOptions& options) noexcept
+                                   unsigned char* flags, const PathOptions& options, unsigned char* info) noexcept
 {
     if (path.pointCount < 2)
     {
@@ -709,7 +719,7 @@ void AmeisenNavigation::DetailPath(const dtNavMeshQuery* query, const dtQueryFil
         struct Segment
         {
             std::vector<ProfileSample> samples; // empty: not detailed (off-mesh connection, raycast failed)
-            std::vector<bool> keep;
+            std::vector<unsigned char> keep;    // SampleKind
         };
 
         std::vector<Segment> segments(static_cast<size_t>(path.pointCount - 1));
@@ -761,7 +771,7 @@ void AmeisenNavigation::DetailPath(const dtNavMeshQuery* query, const dtQueryFil
             std::vector<ProfileSample> refined;
             refined.reserve(segment.samples.size() + 8);
             refined.push_back(segment.samples[0]);
-            std::vector<bool> forced{true};
+            std::vector<unsigned char> forced{SAMPLE_END};
 
             for (size_t k = 1; k < segment.samples.size(); ++k)
             {
@@ -802,18 +812,22 @@ void AmeisenNavigation::DetailPath(const dtNavMeshQuery* query, const dtQueryFil
                     if (before.t > refined.back().t + 1e-4f)
                     {
                         refined.push_back(before);
-                        forced.push_back(true);
+                        forced.push_back(SAMPLE_BORDER);
+                    }
+                    else
+                    {
+                        forced.back() = SAMPLE_BORDER;
                     }
 
                     if (after.t < current.t - 1e-4f)
                     {
                         refined.push_back(after);
-                        forced.push_back(true);
+                        forced.push_back(SAMPLE_END);
                     }
                 }
 
                 refined.push_back(current);
-                forced.push_back(k + 1 == segment.samples.size());
+                forced.push_back(k + 1 == segment.samples.size() ? SAMPLE_END : SAMPLE_SKIP);
             }
 
             segment.samples = std::move(refined);
@@ -824,7 +838,7 @@ void AmeisenNavigation::DetailPath(const dtNavMeshQuery* query, const dtQueryFil
 
             for (size_t k = 1; k < segment.samples.size(); ++k)
             {
-                if (segment.keep[k])
+                if (segment.keep[k] == SAMPLE_END || segment.keep[k] == SAMPLE_BORDER)
                 {
                     KeepBends(segment.samples, from, k, error, segment.keep);
                     from = k;
@@ -835,14 +849,17 @@ void AmeisenNavigation::DetailPath(const dtNavMeshQuery* query, const dtQueryFil
         // Assemble; a path that doesn't fit gets a larger spacing, then no fill at all.
         std::vector<Vector3> points;
         std::vector<unsigned char> pointFlags;
+        std::vector<unsigned char> pointInfo;
 
         for (int attempt = 0; attempt < 8; ++attempt)
         {
             const bool fill = attempt < 7;
             points.clear();
             pointFlags.clear();
+            pointInfo.clear();
             points.push_back(path[0]);
             pointFlags.push_back(flags[0]);
+            pointInfo.push_back(0);
 
             for (int i = 0; i + 1 < path.pointCount; ++i)
             {
@@ -859,10 +876,14 @@ void AmeisenNavigation::DetailPath(const dtNavMeshQuery* query, const dtQueryFil
                         const bool gap = fill && (sample.t - last->t) * length >= spacing - SAMPLE_STEP * 0.5f;
 
                         // Samples off the navmesh (a polygon edge between two samples) are never added.
-                        if (sample.onMesh && (segment.keep[k] || gap))
+                        if (sample.onMesh && (segment.keep[k] != SAMPLE_SKIP || gap))
                         {
                             points.push_back(sample.pos);
                             pointFlags.push_back(0);
+                            pointInfo.push_back(segment.keep[k] == SAMPLE_BORDER ? POINT_INFO_SURFACE_CHANGE
+                                                : segment.keep[k] == SAMPLE_BEND ? POINT_INFO_SLOPE_CHANGE
+                                                : segment.keep[k] == SAMPLE_SKIP ? POINT_INFO_SPACING
+                                                                                 : 0);
                             last = &sample;
                         }
                     }
@@ -870,12 +891,48 @@ void AmeisenNavigation::DetailPath(const dtNavMeshQuery* query, const dtQueryFil
 
                 points.push_back(path[i + 1]);
                 pointFlags.push_back(flags[i + 1]);
+                pointInfo.push_back(0);
             }
 
             if (static_cast<int>(points.size()) <= path.maxSize)
             {
+                // Bends: a crest or a dip where the slope changes sign, else a change of slope.
+                constexpr float FLAT = 0.02f; // rise per yard below which a slope counts as flat
+
+                for (size_t k = 1; k + 1 < points.size(); ++k)
+                {
+                    if (!(pointInfo[k] & POINT_INFO_SLOPE_CHANGE))
+                    {
+                        continue;
+                    }
+
+                    const auto slope = [](const Vector3& from, const Vector3& to) {
+                        const float run =
+                            std::sqrt((to.x - from.x) * (to.x - from.x) + (to.z - from.z) * (to.z - from.z));
+                        return run > 1e-3f ? (to.y - from.y) / run : 0.0f;
+                    };
+
+                    const float before = slope(points[k - 1], points[k]);
+                    const float after = slope(points[k], points[k + 1]);
+
+                    if (before > FLAT && after < -FLAT)
+                    {
+                        pointInfo[k] = POINT_INFO_CREST;
+                    }
+                    else if (before < -FLAT && after > FLAT)
+                    {
+                        pointInfo[k] = POINT_INFO_DIP;
+                    }
+                }
+
                 std::copy(points.begin(), points.end(), path.points);
                 std::copy(pointFlags.begin(), pointFlags.end(), flags);
+
+                if (info)
+                {
+                    std::copy(pointInfo.begin(), pointInfo.end(), info);
+                }
+
                 path.pointCount = static_cast<int>(points.size());
                 return;
             }
@@ -887,5 +944,33 @@ void AmeisenNavigation::DetailPath(const dtNavMeshQuery* query, const dtQueryFil
     }
     catch (...)
     {
+    }
+}
+
+void AmeisenNavigation::DescribePoints(const dtNavMeshQuery* query, const dtQueryFilter* filter, const Path& path,
+                                       unsigned char* info, unsigned char* areas) noexcept
+{
+    for (int i = 0; i < path.pointCount; ++i)
+    {
+        dtPolyRef ref = 0;
+        float nearest[3]{};
+        unsigned char area = 0;
+
+        if (IsValidPosition(path[i]) &&
+            dtStatusSucceed(query->findNearestPoly(path[i], RAYCAST_POLY_EXTENTS, filter, &ref, nearest)) && ref)
+        {
+            query->getAttachedNavMesh()->getPolyArea(ref, &area);
+        }
+
+        areas[i] = area;
+    }
+
+    // Ground changes between two points that DETAIL didn't mark (corners, paths without DETAIL).
+    for (int i = 0; i + 1 < path.pointCount; ++i)
+    {
+        if (areas[i] && areas[i + 1] && areas[i] != areas[i + 1])
+        {
+            info[i] |= POINT_INFO_SURFACE_CHANGE;
+        }
     }
 }

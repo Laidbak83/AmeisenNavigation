@@ -170,7 +170,8 @@ namespace AmeisenNavigation.Client
 
         /// <summary>
         /// Find a path and get what each point is: where to jump or drop (off-mesh connections) and whether the end
-        /// is reachable. <see cref="PathFlags.Randomize"/> adds random offsets. Returns null on failure.
+        /// is reachable. <see cref="PathFlags.Randomize"/> adds random offsets, <see cref="PathFlags.SurfaceInfo"/>
+        /// the ground under every point. Returns null on failure.
         /// Requires protocol version 3 (server 1.10+).
         /// </summary>
         public PathResult? GetPathEx(int mapId, Vector3 start, Vector3 end, PathFlags flags = PathFlags.None,
@@ -867,7 +868,10 @@ namespace AmeisenNavigation.Client
             var header = MemoryMarshal.Read<PathExResponseHeader>(data);
             int pointSize = Marshal.SizeOf<Vector3>();
 
-            if (header.PointCount <= 0 || data.Length != headerSize + (long)header.PointCount * (pointSize + 1))
+            bool withInfo = (header.ResultFlags & 2) != 0;
+
+            if (header.PointCount <= 0
+                || data.Length != headerSize + (long)header.PointCount * (pointSize + (withInfo ? 3 : 1)))
                 return null;
 
             var points = MemoryMarshal.Cast<byte, Vector3>(data.Slice(headerSize, header.PointCount * pointSize)).ToArray();
@@ -877,7 +881,21 @@ namespace AmeisenNavigation.Client
             for (int i = 0; i < flags.Length; i++)
                 flags[i] = (PathPointFlags)flagBytes[i];
 
-            return new PathResult(points, flags, (header.ResultFlags & 1) != 0);
+            byte[]? areas = null;
+            PathPointInfo[]? info = null;
+
+            if (withInfo)
+            {
+                int offset = headerSize + header.PointCount * (pointSize + 1);
+                areas = data.Slice(offset, header.PointCount).ToArray();
+                var infoBytes = data.Slice(offset + header.PointCount, header.PointCount);
+                info = new PathPointInfo[header.PointCount];
+
+                for (int i = 0; i < info.Length; i++)
+                    info[i] = (PathPointInfo)infoBytes[i];
+            }
+
+            return new PathResult(points, flags, (header.ResultFlags & 1) != 0, areas, info);
         }
 
         private bool SendAvoidZonesInternal(int mapId, AvoidZone[] zones)

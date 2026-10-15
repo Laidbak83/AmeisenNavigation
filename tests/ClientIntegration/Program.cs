@@ -204,6 +204,14 @@ var near4 = nav.GetPath(map, Wow(-600, 0, -50), Wow(-400, 0, -50), PathFlags.Det
 var near2 = nav.GetPath(map, Wow(-600, 0, -50), Wow(-400, 0, -50), PathFlags.Detail, new PathTuning(WaypointSpacing: 2f));
 Check(near4 is { Length: >= 45 and <= 60 } && near2 is { Length: >= 90 and <= 110 },
       $"Detail spacing {near4?.Length} / {near2?.Length} points");
+var poolEx = nav.GetPathEx(map, Wow(-150, 0, -430), Wow(-30, 0, -430), PathFlags.Detail | PathFlags.SurfaceInfo);
+Check(poolEx is { Areas: not null, Info: not null }
+      && poolEx.Areas.Length == poolEx.Points.Length && poolEx.Info.Length == poolEx.Points.Length
+      && poolEx.Info.Count(i => i.HasFlag(PathPointInfo.SurfaceChange)) >= 2
+      && poolEx.Areas.Any(a => a is >= AnpArea.LIQUID_WATER and <= AnpArea.HORDE_LIQUID_WATER),
+      $"GetPathEx SurfaceInfo {poolEx?.Points.Length} points");
+Check(nav.GetPathEx(map, Wow(-150, 0, -430), Wow(-30, 0, -430), PathFlags.Detail) is { Areas: null, Info: null },
+      "GetPathEx without SurfaceInfo");
 var body = nav.GetPathEx(map, start, end, PathFlags.ClearBody);
 Check(body is { Points.Length: >= 2 } && body.Flags.All(f => (f & PathPointFlags.Blocked) == 0), "GetPathEx ClearBody");
 

@@ -62,6 +62,13 @@ namespace AmeisenNavigation.Client
         /// </summary>
         Detail = 1 << 12,
 
+        /// <summary>
+        /// <see cref="AmeisenNavClient.GetPathEx"/> only: also return the navmesh area under every point and what the
+        /// ground does there (<see cref="PathResult.Areas"/>, <see cref="PathResult.Info"/>). Most useful with
+        /// <see cref="Detail"/>. Protocol 4 (server 1.12+).
+        /// </summary>
+        SurfaceInfo = 1 << 13,
+
         /// <summary>Smooth natural movement: shortcuts, distance to walls and round corners.</summary>
         Fluid = AvoidWalls | Shortcut | RoundCorners,
     }
@@ -94,6 +101,29 @@ namespace AmeisenNavigation.Client
         Blocked = 1 << 7,
     }
 
+    /// <summary>What the ground does at a point of a <see cref="PathResult"/> (<see cref="PathFlags.SurfaceInfo"/>).</summary>
+    [Flags]
+    public enum PathPointInfo : byte
+    {
+        None = 0,
+
+        /// <summary>The ground changes after this point: water, road, building floor, faction border (see
+        /// <see cref="PathResult.Areas"/>).</summary>
+        SurfaceChange = 1 << 0,
+
+        /// <summary>Top of a rise: up before, down after.</summary>
+        Crest = 1 << 1,
+
+        /// <summary>Bottom of a dip.</summary>
+        Dip = 1 << 2,
+
+        /// <summary>The slope changes here (stairs, a ramp starts or ends).</summary>
+        SlopeChange = 1 << 3,
+
+        /// <summary>Added by <see cref="PathFlags.Detail"/> only to keep the waypoint spacing.</summary>
+        Spacing = 1 << 4,
+    }
+
     /// <summary>
     /// Per request tuning of the path refinement (protocol 3). Negative values use the server's defaults
     /// (fWallMargin, fCornerRadius, iCornerPoints).
@@ -115,5 +145,10 @@ namespace AmeisenNavigation.Client
     /// <param name="Points">Path points (WoW coordinates).</param>
     /// <param name="Flags">One entry per point.</param>
     /// <param name="IsPartial">The end isn't reachable, the path leads as close as possible.</param>
-    public sealed record PathResult(Vector3[] Points, PathPointFlags[] Flags, bool IsPartial);
+    /// <param name="Areas"><see cref="PathFlags.SurfaceInfo"/>: navmesh area id under every point (0 = none), null
+    /// if not requested or the path was smoothed with Chaikin / Catmull-Rom / Bezier.</param>
+    /// <param name="Info"><see cref="PathFlags.SurfaceInfo"/>: what the ground does at every point, null like
+    /// <paramref name="Areas"/>.</param>
+    public sealed record PathResult(Vector3[] Points, PathPointFlags[] Flags, bool IsPartial, byte[]? Areas = null,
+                                    PathPointInfo[]? Info = null);
 }

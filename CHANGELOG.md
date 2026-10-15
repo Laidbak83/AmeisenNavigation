@@ -50,6 +50,9 @@ static world". Re-export to get the `.anw` and `gameobjects.ano` files.
   and at most `fWaypointSpacing` apart. Corners and off-mesh connections keep their place and flags; a path that
   wouldn't fit gets a larger spacing. Optional `PathDetailData` trailer (spacing, height error) per request; C#:
   `PathFlags.Detail`, `PathTuning.WaypointSpacing`/`WaypointHeightError`.
+- Path flag `8192` SURFACE_INFO (PATH_EX): two more bytes per point, the navmesh area under it and `PathPointInfo`
+  (ground change after the point, crest, dip, slope change, spacing point), announced by result flag `2`. Old clients
+  never see them. C#: `PathFlags.SurfaceInfo`, `PathResult.Areas`/`Info`, `PathPointInfo`.
 
 ### Fixed
 

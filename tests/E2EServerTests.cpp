@@ -497,6 +497,60 @@ TEST_CASE(Server_PathExReportsPointFlags)
     CHECK((flags.front() & PATH_POINT_START) != 0);
 }
 
+TEST_CASE(Server_PathExSurfaceInfo)
+{
+    ServerFixture server;
+    RawClient client(server.Port());
+    REQUIRE(client.Connected());
+
+    // Across the pool with DETAIL: areas and info follow the flags.
+    PathRequestData request =
+        MakePathRequest(static_cast<int>(PathRequestFlags::DETAIL) | static_cast<int>(PathRequestFlags::SURFACE_INFO));
+    request.start = Wow(-150.0f, 0.0f, -430.0f);
+    request.end = Wow(-30.0f, 0.0f, -430.0f);
+    auto response = client.Request(MessageType::PATH_EX, request);
+    REQUIRE(response.has_value());
+    PathExResponseHeader header{};
+    REQUIRE(response->size() >= sizeof(header));
+    std::memcpy(&header, response->data(), sizeof(header));
+    CHECK_EQ(header.resultFlags, static_cast<int>(PATH_RESULT_SURFACE_INFO));
+    const auto count = static_cast<size_t>(header.pointCount);
+    REQUIRE(count >= 2);
+    REQUIRE(response->size() == sizeof(header) + count * (sizeof(Vector3) + 3));
+    const auto* areas =
+        reinterpret_cast<const unsigned char*>(response->data()) + sizeof(header) + count * (sizeof(Vector3) + 1);
+    const auto* info = areas + count;
+    int changes = 0, wet = 0;
+
+    for (size_t i = 0; i < count; ++i)
+    {
+        changes += (info[i] & POINT_INFO_SURFACE_CHANGE) != 0;
+        wet += IsLiquidArea(areas[i]);
+        CHECK(areas[i] != 0);
+    }
+
+    CHECK(changes >= 2);
+    CHECK(wet >= 1);
+
+    // Not asked: the old layout.
+    request.flags = static_cast<int>(PathRequestFlags::DETAIL);
+    response = client.Request(MessageType::PATH_EX, request);
+    REQUIRE(response.has_value());
+    std::memcpy(&header, response->data(), sizeof(header));
+    CHECK_EQ(header.resultFlags, 0);
+    CHECK(response->size() == sizeof(header) + static_cast<size_t>(header.pointCount) * (sizeof(Vector3) + 1));
+
+    // Legacy smoothing moves the points: no info.
+    request = MakePathRequest(static_cast<int>(PathRequestFlags::SMOOTH_CATMULLROM) |
+                              static_cast<int>(PathRequestFlags::SURFACE_INFO));
+    response = client.Request(MessageType::PATH_EX, request);
+    REQUIRE(response.has_value());
+    std::memcpy(&header, response->data(), sizeof(header));
+    CHECK_EQ(header.resultFlags, 0);
+    CHECK(header.pointCount > 5);
+    CHECK(response->size() == sizeof(header) + static_cast<size_t>(header.pointCount) * (sizeof(Vector3) + 1));
+}
+
 TEST_CASE(Server_CastRayAndCastRayEx)
 {
     ServerFixture server;

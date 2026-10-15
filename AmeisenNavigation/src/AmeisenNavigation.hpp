@@ -200,6 +200,16 @@ enum PathPointFlags : unsigned char
     PATH_POINT_BLOCKED = 1 << 7, // clearBody: the body runs into something on the way to the next point (jump?)
 };
 
+/// What the ground does at a path point (PATH_EX with SURFACE_INFO).
+enum PathPointInfo : unsigned char
+{
+    POINT_INFO_SURFACE_CHANGE = 1 << 0, // the ground changes after this point (water, road, building, faction border)
+    POINT_INFO_CREST = 1 << 1,          // top of a rise (up before, down after)
+    POINT_INFO_DIP = 1 << 2,            // bottom of a dip
+    POINT_INFO_SLOPE_CHANGE = 1 << 3,   // the slope changes here (stairs, a ramp starts or ends)
+    POINT_INFO_SPACING = 1 << 4,        // added by DETAIL to keep the spacing
+};
+
 /// Details of an ExplorePolygon run.
 struct ExploreResult
 {
@@ -269,13 +279,17 @@ public:
     /// Find a path from start to end. Returns true on success, populates path (WoW coordinates).
     /// If the end isn't reachable the path leads as close as possible and *partial is set to true.
     /// pointFlags (optional, path.maxSize entries) receives the PathPointFlags of every point.
+    /// pointInfo / pointAreas (optional, path.maxSize entries each) receive the PathPointInfo and the navmesh area of
+    /// every point.
     bool GetPath(size_t clientId, int mapId, const Vector3& startPosition, const Vector3& endPosition, Path& path,
-                 bool* partial = nullptr, const PathOptions* options = nullptr, unsigned char* pointFlags = nullptr);
+                 bool* partial = nullptr, const PathOptions* options = nullptr, unsigned char* pointFlags = nullptr,
+                 unsigned char* pointInfo = nullptr, unsigned char* pointAreas = nullptr);
 
     /// Find a path with randomized intermediate waypoints (within maxRandomDistance).
     bool GetRandomPath(size_t clientId, int mapId, const Vector3& startPosition, const Vector3& endPosition,
                        Path& path, float maxRandomDistance, bool* partial = nullptr,
-                       const PathOptions* options = nullptr, unsigned char* pointFlags = nullptr);
+                       const PathOptions* options = nullptr, unsigned char* pointFlags = nullptr,
+                       unsigned char* pointInfo = nullptr, unsigned char* pointAreas = nullptr);
 
     /// Route that explores an area: waypoints on a hexagonal grid (`spacing` apart) inside the polygon
     /// (WoW x/y outline, the outline's z picks the floor), snapped to the navmesh, visited in a short tour
@@ -480,7 +494,11 @@ private:
     /// most waypointSpacing apart. Corners and off-mesh connections stay as they are, new points have no flags. The
     /// spacing grows if the path wouldn't fit.
     static void DetailPath(const dtNavMeshQuery* query, const dtQueryFilter* filter, Path& path, unsigned char* flags,
-                           const PathOptions& options) noexcept;
+                           const PathOptions& options, unsigned char* info = nullptr) noexcept;
+
+    /// Navmesh area under every point (RD path, 0 = none) and POINT_INFO_SURFACE_CHANGE where it changes.
+    static void DescribePoints(const dtNavMeshQuery* query, const dtQueryFilter* filter, const Path& path,
+                               unsigned char* info, unsigned char* areas) noexcept;
 
     static void ShortcutPath(const dtNavMeshQuery* query, const dtQueryFilter* filter, Path& path) noexcept;
     static void CutAtStopDistance(const dtNavMeshQuery* query, const dtQueryFilter* filter, Path& path,

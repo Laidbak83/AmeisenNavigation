@@ -3,6 +3,7 @@
 #include <cmath>
 #include <filesystem>
 #include <mutex>
+#include <vector>
 
 #include "AmeisenNavigation.hpp"
 #include "TestWorld.hpp"
@@ -207,4 +208,72 @@ TEST_CASE(Detail_KeepsOffMeshConnectionsAndFlags)
     }
 
     CHECK_EQ(starts, 1);
+}
+
+TEST_CASE(Detail_SurfaceInfo)
+{
+    // Hill: the crest is marked as such, every point has the ground's area.
+    {
+        AmeisenNavigation nav = MakeNav(HillScene());
+        REQUIRE(nav.NewClient(1));
+        PathOptions options;
+        options.detail = true;
+        Path path(512);
+        std::vector<unsigned char> info(512, 0xFF), areas(512, 0xFF);
+        REQUIRE(nav.GetPath(1, HILL_MAP, Wow(-190.0f, 0.0f, LANE_Z), Wow(-30.0f, 0.0f, LANE_Z), path, nullptr, &options,
+                            nullptr, info.data(), areas.data()));
+        bool crest = false, spacing = false;
+
+        for (int i = 0; i < path.pointCount; ++i)
+        {
+            crest |= (info[i] & POINT_INFO_CREST) && std::fabs(path[i].y - HILL_X) < 0.75f;
+            spacing |= (info[i] & POINT_INFO_SPACING) != 0;
+            CHECK(!(info[i] & POINT_INFO_CREST) || std::fabs(path[i].y - HILL_X) < 0.75f); // the only crest
+            CHECK(!(info[i] & POINT_INFO_SURFACE_CHANGE));                                 // all one ground
+            CHECK_EQ(static_cast<int>(areas[i]), static_cast<int>(TERRAIN_GROUND));
+        }
+
+        CHECK(crest);
+        CHECK(spacing);
+    }
+
+    AmeisenNavigation nav = MakeNav(TestWorld::Get().meshDir);
+    REQUIRE(nav.NewClient(1));
+    Path path(256);
+    std::vector<unsigned char> info(256, 0xFF), areas(256, 0xFF);
+
+    // Pool, with DETAIL: the ground changes at both shores, the points in between are in water.
+    PathOptions options;
+    options.detail = true;
+    options.waypointSpacing = 50.0f;
+    REQUIRE(nav.GetPath(1, TestWorld::MAP_ID, Wow(-150.0f, 0.0f, -430.0f), Wow(-30.0f, 0.0f, -430.0f), path, nullptr,
+                        &options, nullptr, info.data(), areas.data()));
+    int changes = 0, wet = 0;
+
+    for (int i = 0; i < path.pointCount; ++i)
+    {
+        if (info[i] & POINT_INFO_SURFACE_CHANGE)
+        {
+            ++changes;
+            REQUIRE(i + 1 < path.pointCount);
+            CHECK(IsLiquidArea(areas[i]) != IsLiquidArea(areas[i + 1]));
+            CHECK(std::fabs(path[i].y + 120.0f) < 2.0f || std::fabs(path[i].y + 60.0f) < 2.0f);
+        }
+
+        wet += IsLiquidArea(areas[i]);
+        CHECK(areas[i] != 0);
+    }
+
+    CHECK(changes >= 2);
+    CHECK(wet >= 2);
+
+    // Without DETAIL: areas still filled, the info has only ground changes.
+    REQUIRE(nav.GetPath(1, TestWorld::MAP_ID, Wow(-150.0f, 0.0f, -430.0f), Wow(-30.0f, 0.0f, -430.0f), path, nullptr,
+                        nullptr, nullptr, info.data(), areas.data()));
+
+    for (int i = 0; i < path.pointCount; ++i)
+    {
+        CHECK(areas[i] != 0);
+        CHECK((info[i] & ~POINT_INFO_SURFACE_CHANGE) == 0);
+    }
 }

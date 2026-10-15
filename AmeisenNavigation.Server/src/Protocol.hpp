@@ -26,6 +26,8 @@
 ///   REPORT_STUCK            -> bool, request: ReportStuckData
 ///   PATH_EX                 -> PathExResponseHeader + pointCount Vector3 + pointCount uint8 PathPointFlags
 ///                              (pointCount 0 on failure), request: like PATH (RANDOMIZE flag for random offsets)
+///                              + with PATH_RESULT_SURFACE_INFO: pointCount uint8 navmesh areas
+///                              + pointCount uint8 PathPointInfo
 ///   LINE_OF_SIGHT           -> WorldHitResponse, request: LineOfSightData
 ///   SURFACES                -> SurfacesResponseHeader + count SurfaceData, request: SurfacesRequestData
 ///   SWEEP                   -> WorldHitResponse, request: SweepData
@@ -78,6 +80,7 @@ enum class PathRequestFlags : int
     RANDOMIZE = 1 << 10,         // PATH_EX only: random offsets like RANDOM_PATH
     CLEAR_BODY = 1 << 11,        // sweep a body along the path (static world), go around what blocks it
     DETAIL = 1 << 12,            // dense waypoints on the surface: area changes, height bends, max spacing
+    SURFACE_INFO = 1 << 13,      // PATH_EX only: navmesh area and PathPointInfo of every point
 };
 
 /// Bumped whenever requests/responses are added or extended (reported by GET_CONFIG).
@@ -86,7 +89,8 @@ enum class PathRequestFlags : int
 ///   3: AVOID_WALLS, SHORTCUT, ROUND_CORNERS, FOLLOW, PathTuningData trailer, SET_AVOID_ZONES, STEER,
 ///      REPORT_STUCK, PATH_EX, CONFIGURE_FILTER cost 0 (forbid) / > 0 (allow areas excluded by default)
 ///   4: LINE_OF_SIGHT, SURFACES, SWEEP (static world), SET_OBJECTS (game objects at runtime), CLEAR_BODY and the
-///      PATH_EX point flags BYPASS / BLOCKED, DETAIL and the PathDetailData trailer
+///      PATH_EX point flags BYPASS / BLOCKED, DETAIL and the PathDetailData trailer,
+///      SURFACE_INFO (PATH_EX areas and PathPointInfo)
 constexpr int PROTOCOL_VERSION = 4;
 
 constexpr bool HasFlag(int flags, PathRequestFlags flag) noexcept { return (flags & static_cast<int>(flag)) != 0; }
@@ -126,7 +130,8 @@ struct PathExResponseHeader
 
 enum PathExResultFlags : int
 {
-    PATH_RESULT_PARTIAL = 1 << 0, // the end isn't reachable, the path leads as close as possible
+    PATH_RESULT_PARTIAL = 1 << 0,      // the end isn't reachable, the path leads as close as possible
+    PATH_RESULT_SURFACE_INFO = 1 << 1, // areas and PathPointInfo follow the flags (not after legacy smoothing)
 };
 
 struct MoveRequestData

@@ -184,7 +184,8 @@ bool AmeisenNavigation::PreloadMap(int mapId) noexcept
 }
 
 bool AmeisenNavigation::GetPath(size_t clientId, int mapId, const Vector3& startPosition, const Vector3& endPosition,
-                                Path& path, bool* partial, const PathOptions* options, unsigned char* pointFlags)
+                                Path& path, bool* partial, const PathOptions* options, unsigned char* pointFlags,
+                                unsigned char* pointInfo, unsigned char* pointAreas)
 {
     path.Clear();
     const auto ctx = GetQueryContext(clientId, mapId);
@@ -220,9 +221,19 @@ bool AmeisenNavigation::GetPath(size_t clientId, int mapId, const Vector3& start
         ClearBody(ctx.query, ctx.filter, mapId, path, flags, *options);
     }
 
+    if (pointInfo)
+    {
+        std::fill(pointInfo, pointInfo + path.maxSize, static_cast<unsigned char>(0));
+    }
+
     if (options && options->detail)
     {
-        DetailPath(ctx.query, ctx.filter, path, flags, *options);
+        DetailPath(ctx.query, ctx.filter, path, flags, *options, pointInfo);
+    }
+
+    if (pointInfo && pointAreas)
+    {
+        DescribePoints(ctx.query, ctx.filter, path, pointInfo, pointAreas);
     }
 
     if (pointFlags)
@@ -236,7 +247,8 @@ bool AmeisenNavigation::GetPath(size_t clientId, int mapId, const Vector3& start
 
 bool AmeisenNavigation::GetRandomPath(size_t clientId, int mapId, const Vector3& startPosition,
                                       const Vector3& endPosition, Path& path, float maxRandomDistance, bool* partial,
-                                      const PathOptions* options, unsigned char* pointFlags)
+                                      const PathOptions* options, unsigned char* pointFlags, unsigned char* pointInfo,
+                                      unsigned char* pointAreas)
 {
     path.Clear();
     const auto ctx = GetQueryContext(clientId, mapId);
@@ -336,9 +348,19 @@ bool AmeisenNavigation::GetRandomPath(size_t clientId, int mapId, const Vector3&
         ClearBody(ctx.query, ctx.filter, mapId, path, flags, *options);
     }
 
+    if (pointInfo)
+    {
+        std::fill(pointInfo, pointInfo + path.maxSize, static_cast<unsigned char>(0));
+    }
+
     if (options && options->detail)
     {
-        DetailPath(ctx.query, ctx.filter, path, flags, *options);
+        DetailPath(ctx.query, ctx.filter, path, flags, *options, pointInfo);
+    }
+
+    if (pointInfo && pointAreas)
+    {
+        DescribePoints(ctx.query, ctx.filter, path, pointInfo, pointAreas);
     }
 
     if (pointFlags)
